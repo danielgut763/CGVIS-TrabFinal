@@ -86,13 +86,13 @@
 Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final - Moodle](https://moodle.ufrgs.br/mod/assign/view.php?id=6302370)), escreva um parágrafo **curto** explicando como este requisito será atendido, apontando itens específicos do vídeo/imagens que você incluiu acima que atendem estes requisitos.
 
 ### Malhas poligonais complexas
-<mark>`<preencher>`</mark>
+<mark>`Para as malhas poligonais complexas vamos realizar o escaneamento de objetos pessoais para adicionar a fase. São objetos como peão de xadrez, cubo mágico, dado e um boneco. Os objetos serão filmados, retirados os quadros e por fim os quadros entram no software de fotogrametria para sair a malha. Posteriormente a malha será tratada para ser composta a fase. O vídeo de exemplo mostra alguns objetos como um pedaço de queijo, peças de xadrez e cubos, vamos nos inspirar nisso, mas não nos prendendo a objetos específicos; vamos testar com alguns e os melhores ficarão.`</mark>
 
 ### Transformações geométricas controladas pelo usuário
-<mark>`<preencher>`</mark>
+<mark>`Alguns objetos presentes na fase poderão ser controlados pelo usuário, podendo carregar, soltar, rotacionar e controlar o tamanho. O ponto principal é a escala de tamanho que é baseada na distância onde o raio encontra a superfície da cena (jogador controla indiretamente, mirando e andando) e o ângulo de observação. Os controles poderão ser feitos pelo teclado e mouse, como andar usando as teclas WASD e selecionar os objetos usando o mouse.`</mark>
 
 ### Diferentes tipos de câmeras
-<mark>`<preencher>`</mark>
+<mark>`Uma câmera em primeira pessoa e uma câmera livre`</mark>
 
 ### Instâncias de objetos
 <mark>`<preencher>`</mark>
