@@ -11,16 +11,16 @@
 
 ## Integrantes da dupla
 
-- **Aluno 1 - Nome**: <mark>`<preencher>`</mark>
-- **Aluno 1 - Cartão UFRGS**: <mark>`<preencher>`</mark>
+- **Aluno 1 - Nome**: <mark>`Daniel Gutschwager`</mark>
+- **Aluno 1 - Cartão UFRGS**: <mark>`00315708`</mark>
 
-- **Aluno 2 - Nome**: <mark>`<preencher>`</mark>
-- **Aluno 2 - Cartão UFRGS**: <mark>`<preencher>`</mark>
+- **Aluno 2 - Nome**: <mark>`Leonardo Leites`</mark>
+- **Aluno 2 - Cartão UFRGS**: <mark>`00338804`</mark>
 
 ## Detalhes do que será implementado
 
-- **Título do trabalho**: <mark>`<preencher>`</mark>
-- **Parágrafo curto descrevendo o que será implementado**: <mark>`<preencher>`</mark>
+- **Título do trabalho**: <mark>`Infraliminal`</mark>
+- **Parágrafo curto descrevendo o que será implementado**: <mark>`Reimplementar uma fase do jogo Superliminal, um jogo de puzzle que usa a percepão de tamanho dos objetos relativo a distância da camera para de fato aumentar ou diminuir o valor real do objeto em cena.`</mark>
 
 ## Especificação visual
 
@@ -39,7 +39,7 @@
 >   do próprio repositório. Mas, garanta que qualquer um tenha
 >   permissão de acesso ao vídeo através deste link.
 
-<mark>`<preencher>`</mark>
+<mark>`https://www.youtube.com/watch?v=WrQl0WQRGBo`</mark>
 
 ### Vídeo - Timestamp
 
@@ -48,8 +48,8 @@
 >   será a base de comparação para avaliar se o seu trabalho final
 >   conseguiu ou não reproduzir a referência.
 
-- **Timestamp inicial**: <mark>`<preencher>`</mark>
-- **Timestamp final**: <mark>`<preencher>`</mark>
+- **Timestamp inicial**: <mark>`13:30`</mark>
+- **Timestamp final**: <mark>`14:30`</mark>
 
 ### Imagens
 
@@ -65,21 +65,21 @@
 
 #### Imagem 1
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: <mark>`Print mostrando a composição normal da fase com um objeto e um botão a ser pressionado`</mark>
 
-![Imagem 1](images/spec/image1.jpg)
+![Imagem 1](prints/image1.jpeg)
 
 #### Imagem 2
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: <mark>`Print mostrando a mecânica de segurar um objeto da cena, utilizado para aumentar ou diminuir o objeto.`</mark>
 
-![Imagem 2](images/spec/image2.jpg)
+![Imagem 2](prints/image2.jpeg)
 
 #### Imagem 3
 
-- **Descrição**: <mark>`<preencher>`</mark>
+- **Descrição**: <mark>`Print mostrando a Lógica para passar da fase, nessa em especifico um objeto pesado o suficiente precisa estar em cima do botão.`</mark>
 
-![Imagem 3](images/spec/image3.jpg)
+![Imagem 3](prints/Image3.jpeg)
 
 ## Especificação textual
 
