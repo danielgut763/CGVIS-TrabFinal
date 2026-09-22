@@ -92,25 +92,25 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 <mark>`Alguns objetos presentes na fase poderão ser controlados pelo usuário, podendo carregar, soltar, rotacionar e controlar o tamanho. O ponto principal é a escala de tamanho que é baseada na distância onde o raio encontra a superfície da cena (jogador controla indiretamente, mirando e andando) e o ângulo de observação. Os controles poderão ser feitos pelo teclado e mouse, como andar usando as teclas WASD e selecionar os objetos usando o mouse.`</mark>
 
 ### Diferentes tipos de câmeras
-<mark>`Uma câmera em primeira pessoa e uma câmera livre`</mark>
+<mark>`Uma câmera em primeira pessoa e uma câmera look-at (em algum objeto)`</mark>
 
 ### Instâncias de objetos
-<mark>`<preencher>`</mark>
+<mark>`Na sala podemos ter diversas cópias dos objetos escaneados. A malha é carregada uma única vez e desenhada diversas vezes, cada cópiaa com sua própria matriz.`</mark>
 
 ### Testes de intersecção
-<mark>`<preencher>`</mark>
+<mark>`Temos o raio lançado da câmera pelo centro da mira, testado contra os planos das paredes e do chão. O ponto atingido define onde o objeto pousa ao ser solto e sua nova escala. O jogador não poderá atravessar as paredes e os objetos, ou a porta fechada. E também o botão que, quando a peça está em cima, a porta se abre e o jogador pode sair da sala.`</mark>
 
 ### Modelos de Iluminação em todos os objetos
-<mark>`<preencher>`</mark>
+<mark>`A fase tem uma luz principal. Paredes, chão, porta e o restante usam um modelo, ja os objetos escaneados já trazem sombreamento da fotogrametria. Por isso teemos que combinar alguns modelos.`</mark>
 
 ### Mapeamento de texturas em todos os objetos
 <mark>`<preencher>`</mark>
 
 ### Movimentação com curva Bézier cúbica
-<mark>`<preencher>`</mark>
+<mark>`Na sala podemos adicionar um objeto flutuante, cuja movimentação é definida através de uma curva de Bézier cúbica. Esse objeto será decorativo e não pode ser pego.`</mark>
 
 ### Animações baseadas no tempo ($\Delta t$)
-<mark>`<preencher>`</mark>
+<mark>``</mark>
 
 ### Funcionalidade extra obrigatória
 
@@ -120,7 +120,7 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 > - Esta funcionalidade também deverá ser documentada no arquivo
 >   `README.md` da entrega final.
 
-<mark>`<preencher>`</mark>
+<mark>`Teremos a mecânica de pegar um objeto com o mouse (picking), e também sombras`</mark>
 
 ## Limitações esperadas
 
@@ -131,4 +131,7 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 > - Para cada item, **explique por que** não será implementado ou por
 >   que será implementado parcialmente.
 
-<mark>`<preencher>`</mark>
+<mark>`Não pretendemos implementar as distorções visuais que aparecem no vídeo, pois não será essencial para a dinâmica geral e precisamos controlar o tempo necessário que seria utilizado para implementar essa função.
+Além de também não implementarmos uma fase com o ambiente totalmente dinâmico, ou seja, o ambiente não vai mudar para sugestionar o jogador ou para dar algum efeito na cena (como a parede que desaba no vídeo depois que o jogador passa algum tempo na sala "pensando"), pelo mesmo motivo anterior.
+E a fase será uma versão simplificada. No vídeo o jogador é induzido que, ao colocar a peça sobre o botão, terá a sua saída da sala, mas a saída acontece de fato quando ele derruba as paredes com um objeto maior. Na nossa versão, para manter mais simples, vamos fazer apenas com que a porta abra adicionando o objeto em cima do botão e liberando a passagem do jogador.
+Os objetos também serão diferentes dos que aparecem no vídeo.`</mark>
