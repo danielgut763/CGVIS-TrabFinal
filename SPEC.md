@@ -67,19 +67,19 @@
 
 - **Descrição**: <mark>`Print mostrando a composição normal da fase com um objeto e um botão a ser pressionado`</mark>
 
-![Imagem 1](prints/image1.jpeg)
+![Imagem 1](images/spec/image1.jpg)
 
 #### Imagem 2
 
 - **Descrição**: <mark>`Print mostrando a mecânica de segurar um objeto da cena, utilizado para aumentar ou diminuir o objeto.`</mark>
 
-![Imagem 2](prints/image2.jpeg)
+![Imagem 2](images/spec/image2.jpg)
 
 #### Imagem 3
 
 - **Descrição**: <mark>`Print mostrando a Lógica para passar da fase, nessa em especifico um objeto pesado o suficiente precisa estar em cima do botão.`</mark>
 
-![Imagem 3](prints/Image3.jpeg)
+![Imagem 3](images/spec/image3.jpg)
 
 ## Especificação textual
 
@@ -104,13 +104,13 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 <mark>`A fase tem uma luz principal. Paredes, chão, porta e o restante usam um modelo, ja os objetos escaneados já trazem sombreamento da fotogrametria. Por isso teemos que combinar alguns modelos.`</mark>
 
 ### Mapeamento de texturas em todos os objetos
-<mark>`<preencher>`</mark>
+<mark>`Os objetos em cena serão na sua grande maioria composições de texturas procedurais, para emular as paredes, o chão e os objetos.`</mark>
 
 ### Movimentação com curva Bézier cúbica
 <mark>`Na sala podemos adicionar um objeto flutuante, cuja movimentação é definida através de uma curva de Bézier cúbica. Esse objeto será decorativo e não pode ser pego.`</mark>
 
 ### Animações baseadas no tempo ($\Delta t$)
-<mark>``</mark>
+<mark>`Utilizaremos uma estrategia de atualização de quadros baseada em tempo, para garantir que a velocidade das animações estejam desacopladas da velocidade de renderização da GPU`</mark>
 
 ### Funcionalidade extra obrigatória
 
