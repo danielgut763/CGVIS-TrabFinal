@@ -91,6 +91,8 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 ### Transformações geométricas controladas pelo usuário
 <mark>`Alguns objetos presentes na fase poderão ser controlados pelo usuário, podendo carregar, soltar, rotacionar e controlar o tamanho. O ponto principal é a escala de tamanho que é baseada na distância onde o raio encontra a superfície da cena (jogador controla indiretamente, mirando e andando) e o ângulo de observação. Os controles poderão ser feitos pelo teclado e mouse, como andar usando as teclas WASD e selecionar os objetos usando o mouse.`</mark>
 
+> Comentário Professor: Deem bastante atenção à lógica de aumento do tamanho dos objetos conforme a distância e considerem a projeção perspectiva.
+
 ### Diferentes tipos de câmeras
 <mark>`Uma câmera em primeira pessoa e uma câmera look-at (em algum objeto)`</mark>
 
@@ -99,6 +101,8 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 
 ### Testes de intersecção
 <mark>`Temos o raio lançado da câmera pelo centro da mira, testado contra os planos das paredes e do chão. O ponto atingido define onde o objeto pousa ao ser solto e sua nova escala. O jogador não poderá atravessar as paredes e os objetos, ou a porta fechada. E também o botão que, quando a peça está em cima, a porta se abre e o jogador pode sair da sala.`</mark>
+
+> Comentário Professor: Ao posicionarem um objeto por meio de ray casting, testem também sua colisão com a cena ao redor. Não posicionem o objeto diretamente no ponto atingido pelo raio.
 
 ### Modelos de Iluminação em todos os objetos
 <mark>`A fase tem uma luz principal. Paredes, chão, porta e o restante usam um modelo, ja os objetos escaneados já trazem sombreamento da fotogrametria. Por isso teemos que combinar alguns modelos.`</mark>
@@ -122,6 +126,8 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 
 <mark>`Teremos a mecânica de pegar um objeto com o mouse (picking), e também sombras`</mark>
 
+> Comentário Professor: Implementem as sombras: elas são essenciais para que o jogador compreenda o efeito visual de aumento do tamanho dos objetos.
+
 ## Limitações esperadas
 
 > [!IMPORTANT]
@@ -135,3 +141,5 @@ Para cada um dos requisitos abaixo (detalhados no [Enunciado do Trabalho final -
 Além de também não implementarmos uma fase com o ambiente totalmente dinâmico, ou seja, o ambiente não vai mudar para sugestionar o jogador ou para dar algum efeito na cena (como a parede que desaba no vídeo depois que o jogador passa algum tempo na sala "pensando"), pelo mesmo motivo anterior.
 E a fase será uma versão simplificada. No vídeo o jogador é induzido que, ao colocar a peça sobre o botão, terá a sua saída da sala, mas a saída acontece de fato quando ele derruba as paredes com um objeto maior. Na nossa versão, para manter mais simples, vamos fazer apenas com que a porta abra adicionando o objeto em cima do botão e liberando a passagem do jogador.
 Os objetos também serão diferentes dos que aparecem no vídeo.`</mark>
+
+> Comentário Professor: Para o objetivo de sair da sala, acho mais interessante que vocês exijam que o jogador suba em algum objeto cujo tamanho foi aumentado, em vez de simplesmente apertar um botão.
