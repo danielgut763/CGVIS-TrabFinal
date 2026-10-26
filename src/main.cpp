@@ -49,6 +49,10 @@
 #include "utils.h"
 #include "matrices.h"
 
+// Modulos proprios do trabalho final
+#include "scene.h"
+#include "collisions.h"
+
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
 struct ObjModel
@@ -119,6 +123,8 @@ void ComputeNormals(ObjModel* model); // Computa normais de um ObjModel, caso n�
 void LoadShadersFromFiles(); // Carrega os shaders de vértice e fragmento, criando um programa de GPU
 void LoadTextureImage(const char* filename); // Função que carrega imagens de textura
 void DrawVirtualObject(const char* object_name); // Desenha um objeto armazenado em g_VirtualScene
+void DrawInstance(const Instance& inst);           // Desenha uma instancia da cena (ver scene.h)
+std::vector<AABB> BuildSolidAABBs();               // AABBs em mundo de todas as instancias solidas
 GLuint LoadShader_Vertex(const char* filename);   // Carrega um vertex shader
 GLuint LoadShader_Fragment(const char* filename); // Carrega um fragment shader
 void LoadShader(const char* filename, GLuint shader_id); // Função utilizada pelas duas acima
@@ -218,9 +224,25 @@ GLuint g_GpuProgramID = 0;
 GLint g_model_uniform;
 GLint g_view_uniform;
 GLint g_projection_uniform;
-GLint g_object_id_uniform;
 GLint g_bbox_min_uniform;
 GLint g_bbox_max_uniform;
+
+// Uniforms do material da instancia (ver scene.h e shader_fragment.glsl)
+GLint g_uv_mode_uniform;
+GLint g_uv_scale_uniform;
+GLint g_tex_id_uniform;
+GLint g_ks_uniform;
+GLint g_shininess_uniform;
+
+// Uniforms de iluminacao
+GLint g_light_position_uniform;
+GLint g_light_color_uniform;
+GLint g_camera_position_uniform;
+
+// Tempo decorrido desde o quadro anterior, em segundos. TODA movimentacao do
+// jogo deve ser multiplicada por esta variavel, para que a velocidade nao
+// dependa da maquina. Requisito de "animacao baseada no tempo" do enunciado.
+float g_DeltaTime = 0.0f;
 
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
@@ -315,6 +337,24 @@ int main(int argc, char* argv[])
     ComputeNormals(&planemodel);
     BuildTrianglesAndAddToVirtualScene(&planemodel);
 
+    // Cubo unitario criado por nos. E a base de toda a geometria da fase:
+    // piso, teto, paredes e caixas sao instancias desta mesma malha.
+    ObjModel cubemodel("../../data/cube.obj");
+    ComputeNormals(&cubemodel);
+    BuildTrianglesAndAddToVirtualScene(&cubemodel);
+
+    // Monta a lista de instancias da cena (ver scene.cpp).
+    BuildScene(g_Instances);
+
+    // Monta as AABBs em mundo uma vez no inicio, so para conferir que o
+    // modulo de colisao esta funcionando. A partir do M1 isto passa a ser
+    // recalculado a cada quadro para os objetos que se movem.
+    {
+        std::vector<AABB> boxes = BuildSolidAABBs();
+        printf("Cena: %d instancias, %d AABBs solidas.\n",
+               (int)g_Instances.size(), (int)boxes.size());
+    }
+
     if ( argc > 1 )
     {
         ObjModel model(argv[1]);
@@ -357,17 +397,32 @@ int main(int argc, char* argv[])
         // variáveis g_CameraDistance, g_CameraPhi, e g_CameraTheta são
         // controladas pelo mouse do usuário. Veja as funções CursorPosCallback()
         // e ScrollCallback().
+        // ------------------------------------------------------------------
+        // Delta time: tempo decorrido desde o quadro anterior.
+        // Toda movimentacao do jogo e multiplicada por ele, para que a
+        // velocidade seja a mesma em qualquer maquina.
+        // ------------------------------------------------------------------
+        static double prev_time = glfwGetTime();
+        double now_time = glfwGetTime();
+        g_DeltaTime = (float)(now_time - prev_time);
+        prev_time = now_time;
+
+        // Travamos o passo maximo. Sem isto, um engasgo do sistema produziria
+        // um quadro muito longo e os objetos atravessariam a geometria.
+        if (g_DeltaTime > 0.1f)
+            g_DeltaTime = 0.1f;
+
+        // Camera provisoria: look-at orbitando o centro da sala. Sera
+        // substituida pela camera em primeira pessoa no marco M1.
         float r = g_CameraDistance;
         float y = r*sin(g_CameraPhi);
         float z = r*cos(g_CameraPhi)*cos(g_CameraTheta);
         float x = r*cos(g_CameraPhi)*sin(g_CameraTheta);
 
-        // Abaixo definimos as varáveis que efetivamente definem a câmera virtual.
-        // Veja slides 195-227 e 229-234 do documento Aula_08_Sistemas_de_Coordenadas.pdf.
-        glm::vec4 camera_position_c  = glm::vec4(x,y,z,1.0f); // Ponto "c", centro da câmera
-        glm::vec4 camera_lookat_l    = glm::vec4(0.0f,0.0f,0.0f,1.0f); // Ponto "l", para onde a câmera (look-at) estará sempre olhando
-        glm::vec4 camera_view_vector = camera_lookat_l - camera_position_c; // Vetor "view", sentido para onde a câmera está virada
-        glm::vec4 camera_up_vector   = glm::vec4(0.0f,1.0f,0.0f,0.0f); // Vetor "up" fixado para apontar para o "céu" (eito Y global)
+        glm::vec4 camera_lookat_l    = glm::vec4(0.0f, Room::HEIGHT*0.5f, 0.0f, 1.0f);
+        glm::vec4 camera_position_c  = camera_lookat_l + glm::vec4(x, y, z, 0.0f);
+        glm::vec4 camera_view_vector = camera_lookat_l - camera_position_c;
+        glm::vec4 camera_up_vector   = glm::vec4(0.0f,1.0f,0.0f,0.0f);
 
         // Computamos a matriz "View" utilizando os parâmetros da câmera para
         // definir o sistema de coordenadas da câmera.  Veja slides 2-14, 184-190 e 236-242 do documento Aula_08_Sistemas_de_Coordenadas.pdf.
@@ -379,7 +434,7 @@ int main(int argc, char* argv[])
         // Note que, no sistema de coordenadas da câmera, os planos near e far
         // estão no sentido negativo! Veja slides 176-204 do documento Aula_09_Projecoes.pdf.
         float nearplane = -0.1f;  // Posição do "near plane"
-        float farplane  = -10.0f; // Posição do "far plane"
+        float farplane  = -60.0f; // Posição do "far plane"
 
         if (g_UsePerspectiveProjection)
         {
@@ -402,39 +457,24 @@ int main(int argc, char* argv[])
             projection = Matrix_Orthographic(l, r, b, t, nearplane, farplane);
         }
 
-        glm::mat4 model = Matrix_Identity(); // Transformação identidade de modelagem
-
-        // Enviamos as matrizes "view" e "projection" para a placa de vídeo
-        // (GPU). Veja o arquivo "shader_vertex.glsl", onde estas são
-        // efetivamente aplicadas em todos os pontos.
+        // Enviamos as matrizes "view" e "projection" para a GPU.
         glUniformMatrix4fv(g_view_uniform       , 1 , GL_FALSE , glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform , 1 , GL_FALSE , glm::value_ptr(projection));
 
-        #define SPHERE 0
-        #define BUNNY  1
-        #define PLANE  2
+        // Fonte de luz unica, proxima ao teto no centro da sala. Ela sera o
+        // ponto de vista do shadow map quando as sombras entrarem (M4).
+        glm::vec4 light_position = glm::vec4(0.0f, Room::HEIGHT - 0.35f, 0.0f, 1.0f);
+        glUniform4f(g_light_position_uniform,
+                    light_position.x, light_position.y, light_position.z, 1.0f);
+        glUniform3f(g_light_color_uniform, 1.0f, 0.96f, 0.88f);
+        glUniform4f(g_camera_position_uniform,
+                    camera_position_c.x, camera_position_c.y, camera_position_c.z, 1.0f);
 
-        // Desenhamos o modelo da esfera
-        model = Matrix_Translate(-1.0f,0.0f,0.0f)
-              * Matrix_Rotate_Z(0.6f)
-              * Matrix_Rotate_X(0.2f)
-              * Matrix_Rotate_Y(g_AngleY + (float)glfwGetTime() * 0.1f);
-        glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, SPHERE);
-        DrawVirtualObject("the_sphere");
-
-        // Desenhamos o modelo do coelho
-        model = Matrix_Translate(1.0f,0.0f,0.0f)
-              * Matrix_Rotate_X(g_AngleX + (float)glfwGetTime() * 0.1f);
-        glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, BUNNY);
-        DrawVirtualObject("the_bunny");
-
-        // Desenhamos o plano do chão
-        model = Matrix_Translate(0.0f,-1.1f,0.0f);
-        glUniformMatrix4fv(g_model_uniform, 1 , GL_FALSE , glm::value_ptr(model));
-        glUniform1i(g_object_id_uniform, PLANE);
-        DrawVirtualObject("the_plane");
+        // Desenho da cena: um unico laco sobre a lista de instancias, no lugar
+        // das chamadas fixas do template. Cada instancia manda a sua propria
+        // Model matrix e o seu material.
+        for (size_t i = 0; i < g_Instances.size(); ++i)
+            DrawInstance(g_Instances[i]);
 
         // Imprimimos na tela os ângulos de Euler que controlam a rotação do
         // terceiro cubo.
@@ -496,8 +536,10 @@ void LoadTextureImage(const char* filename)
     glGenSamplers(1, &sampler_id);
 
     // Veja slides 95-96 do documento Aula_20_Mapeamento_de_Texturas.pdf
-    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // GL_REPEAT (e nao CLAMP) porque as paredes repetem a textura varias vezes
+    // ao longo da sua extensao. Ver uv_mode == UV_WORLD no fragment shader.
+    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glSamplerParameteri(sampler_id, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
     // Parâmetros de amostragem da textura.
     glSamplerParameteri(sampler_id, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -557,6 +599,49 @@ void DrawVirtualObject(const char* object_name)
 // Função que carrega os shaders de vértices e de fragmentos que serão
 // utilizados para renderização. Veja slides 180-200 do documento Aula_03_Rendering_Pipeline_Grafico.pdf.
 //
+// Desenha uma instancia da cena: envia a Model matrix e os parametros do
+// material, e chama o desenho da malha correspondente.
+void DrawInstance(const Instance& inst)
+{
+    glm::mat4 model = InstanceModelMatrix(inst);
+    glUniformMatrix4fv(g_model_uniform, 1, GL_FALSE, glm::value_ptr(model));
+
+    glUniform1i(g_uv_mode_uniform,   inst.mat.uv_mode);
+    glUniform1f(g_uv_scale_uniform,  inst.mat.uv_scale);
+    glUniform1i(g_tex_id_uniform,    inst.mat.texture_id);
+    glUniform1f(g_ks_uniform,        inst.mat.ks);
+    glUniform1f(g_shininess_uniform, inst.mat.shininess);
+
+    DrawVirtualObject(inst.mesh.c_str());
+}
+
+// Devolve a AABB em coordenadas de mundo de cada instancia solida da cena.
+// A bounding box LOCAL vem de g_VirtualScene, preenchida pelo carregador de
+// OBJ; AABBTransform (collisions.cpp) leva os 8 cantos para mundo.
+std::vector<AABB> BuildSolidAABBs()
+{
+    std::vector<AABB> boxes;
+    boxes.reserve(g_Instances.size());
+
+    for (size_t i = 0; i < g_Instances.size(); ++i)
+    {
+        const Instance& inst = g_Instances[i];
+        if (!inst.solid)
+            continue;
+
+        std::map<std::string, SceneObject>::const_iterator it =
+            g_VirtualScene.find(inst.mesh);
+        if (it == g_VirtualScene.end())
+            continue;
+
+        boxes.push_back(AABBTransform(it->second.bbox_min,
+                                      it->second.bbox_max,
+                                      InstanceModelMatrix(inst)));
+    }
+
+    return boxes;
+}
+
 void LoadShadersFromFiles()
 {
     // Note que o caminho para os arquivos "shader_vertex.glsl" e
@@ -593,9 +678,18 @@ void LoadShadersFromFiles()
     g_model_uniform      = glGetUniformLocation(g_GpuProgramID, "model"); // Variável da matriz "model"
     g_view_uniform       = glGetUniformLocation(g_GpuProgramID, "view"); // Variável da matriz "view" em shader_vertex.glsl
     g_projection_uniform = glGetUniformLocation(g_GpuProgramID, "projection"); // Variável da matriz "projection" em shader_vertex.glsl
-    g_object_id_uniform  = glGetUniformLocation(g_GpuProgramID, "object_id"); // Variável "object_id" em shader_fragment.glsl
     g_bbox_min_uniform   = glGetUniformLocation(g_GpuProgramID, "bbox_min");
     g_bbox_max_uniform   = glGetUniformLocation(g_GpuProgramID, "bbox_max");
+
+    g_uv_mode_uniform    = glGetUniformLocation(g_GpuProgramID, "uv_mode");
+    g_uv_scale_uniform   = glGetUniformLocation(g_GpuProgramID, "uv_scale");
+    g_tex_id_uniform     = glGetUniformLocation(g_GpuProgramID, "tex_id");
+    g_ks_uniform         = glGetUniformLocation(g_GpuProgramID, "ks");
+    g_shininess_uniform  = glGetUniformLocation(g_GpuProgramID, "shininess");
+
+    g_light_position_uniform  = glGetUniformLocation(g_GpuProgramID, "light_position");
+    g_light_color_uniform     = glGetUniformLocation(g_GpuProgramID, "light_color");
+    g_camera_position_uniform = glGetUniformLocation(g_GpuProgramID, "camera_position");
 
     // Variáveis em "shader_fragment.glsl" para acesso das imagens de textura
     glUseProgram(g_GpuProgramID);

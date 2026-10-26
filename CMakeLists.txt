@@ -7,6 +7,8 @@
 # ser compilados.
 set(SOURCES
   src/main.cpp
+  src/scene.cpp
+  src/collisions.cpp
   src/correcao.cpp
   src/textrendering.cpp
   src/tiny_obj_loader.cpp
