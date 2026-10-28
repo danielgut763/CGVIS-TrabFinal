@@ -72,4 +72,22 @@ RayHit RaycastBoxes(const glm::vec3& origin, const glm::vec3& dir,
 bool AABBOverlapsAny(const AABB& box, const std::vector<AABB>& boxes,
                      int skip_index);
 
+// Devolve o indice da primeira caixa da lista que contem o ponto "p"
+// (ignorando skip_index), ou -1 se nenhuma contiver. Usado para detectar o
+// jogador em cima de um objeto e sobre o botao.
+int FindBoxContainingPoint(const glm::vec3& p,
+                           const std::vector<AABB>& boxes,
+                           int skip_index);
+
+// Move uma AABB por "delta" resolvendo colisoes contra "boxes" UM EIXO POR
+// VEZ. Em cada eixo, se o deslocamento faria a caixa penetrar algum obstaculo
+// solido (ignorando skip_index), o movimento naquele eixo e truncado na face
+// de contato e "out_hit_axis[eixo]" recebe true.
+// Devolve o deslocamento efetivamente aplicado.
+glm::vec3 ResolveAABBMovement(const AABB& box,
+                              const glm::vec3& delta,
+                              const std::vector<AABB>& boxes,
+                              int skip_index,
+                              bool out_hit_axis[3]);
+
 #endif // COLLISIONS_H

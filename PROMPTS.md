@@ -36,7 +36,7 @@ Formato de cada entrada:
 
 ### 2026-10-24 — M0: modularização, cena por instâncias, sala e delta time
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `6ee5980`
 
 **Arquivos gerados/alterados por IA:** `src/scene.h`, `src/scene.cpp`,
 `src/collisions.h`, `src/collisions.cpp`, `data/cube.obj`,
@@ -59,6 +59,25 @@ no laço principal.
 ```
 
 **Ferramenta:** Claude (Anthropic)
+
+**O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
+foi corrigido à mão e por quê>
+
+### 2026-10-28 — M1: câmera 1ª pessoa, movimentação, gravidade e colisão por eixo
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/camera.h`, `src/camera.cpp`,
+`src/player.h`, `src/player.cpp`, `src/collisions.h`, `src/collisions.cpp`,
+`src/main.cpp`, `CMakeLists.txt`
+
+**Prompt:**
+
+```
+Implemente a M1-andar do plano da entrega parcial, contido no plano.md
+```
+
+**Ferramenta:** Gemini (Google Antigravity)
 
 **O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
 foi corrigido à mão e por quê>

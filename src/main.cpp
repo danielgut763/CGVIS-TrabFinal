@@ -52,6 +52,8 @@
 // Modulos proprios do trabalho final
 #include "scene.h"
 #include "collisions.h"
+#include "camera.h"
+#include "player.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
@@ -197,21 +199,12 @@ bool g_LeftMouseButtonPressed = false;
 bool g_RightMouseButtonPressed = false; // Análogo para botão direito do mouse
 bool g_MiddleMouseButtonPressed = false; // Análogo para botão do meio do mouse
 
-// Variáveis que definem a câmera em coordenadas esféricas, controladas pelo
-// usuário através do mouse (veja função CursorPosCallback()). A posição
-// efetiva da câmera é calculada dentro da função main(), dentro do loop de
-// renderização.
-float g_CameraTheta = 0.0f; // Ângulo no plano ZX em relação ao eixo Z
-float g_CameraPhi = 0.0f;   // Ângulo em relação ao eixo Y
-float g_CameraDistance = 3.5f; // Distância da câmera para a origem
-
-// Variáveis que controlam rotação do antebraço
-float g_ForearmAngleZ = 0.0f;
-float g_ForearmAngleX = 0.0f;
-
-// Variáveis que controlam translação do torso
-float g_TorsoPositionX = 0.0f;
-float g_TorsoPositionY = 0.0f;
+// Estado da camera (1a pessoa + look-at) e do jogador (M1 - Andar).
+Camera      g_Camera;
+Player      g_Player;
+PlayerInput g_PlayerInput = { false, false, false, false, false };
+bool        g_CursorLocked = true;
+bool        g_FirstMouse   = true;
 
 // Variável que controla o tipo de projeção utilizada: perspectiva ou ortográfica.
 bool g_UsePerspectiveProjection = true;
@@ -276,7 +269,7 @@ int main(int argc, char* argv[])
     // Criamos uma janela do sistema operacional, com 800 colunas e 600 linhas
     // de pixels, e com título "INF01047 ...".
     GLFWwindow* window;
-    window = glfwCreateWindow(800, 600, "INF01047 - Seu Cartao - Seu Nome", NULL, NULL);
+    window = glfwCreateWindow(800, 600, "INF01047 - Infraliminal", NULL, NULL);
     if (!window)
     {
         glfwTerminate();
@@ -293,6 +286,10 @@ int main(int argc, char* argv[])
     glfwSetCursorPosCallback(window, CursorPosCallback);
     // ... ou rolar a "rodinha" do mouse.
     glfwSetScrollCallback(window, ScrollCallback);
+
+    // Capturamos o cursor do mouse para controle continuo da camera em 1a
+    // pessoa (pode ser liberado/reativado com TAB).
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     // Indicamos que as chamadas OpenGL deverão renderizar nesta janela
     glfwMakeContextCurrent(window);
@@ -346,9 +343,12 @@ int main(int argc, char* argv[])
     // Monta a lista de instancias da cena (ver scene.cpp).
     BuildScene(g_Instances);
 
-    // Monta as AABBs em mundo uma vez no inicio, so para conferir que o
-    // modulo de colisao esta funcionando. A partir do M1 isto passa a ser
-    // recalculado a cada quadro para os objetos que se movem.
+    // Inicializa jogador e camera em primeira pessoa: o jogador nasce perto da
+    // parede -X olhando para +X (yaw = 0), em direcao as caixas e ao vao da
+    // saida elevada.
+    PlayerInit(g_Player, glm::vec3(-2.8f, 0.0f, 0.0f));
+    CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
+
     {
         std::vector<AABB> boxes = BuildSolidAABBs();
         printf("Cena: %d instancias, %d AABBs solidas.\n",
@@ -393,10 +393,6 @@ int main(int argc, char* argv[])
         // os shaders de vértice e fragmentos).
         glUseProgram(g_GpuProgramID);
 
-        // Computamos a posição da câmera utilizando coordenadas esféricas.  As
-        // variáveis g_CameraDistance, g_CameraPhi, e g_CameraTheta são
-        // controladas pelo mouse do usuário. Veja as funções CursorPosCallback()
-        // e ScrollCallback().
         // ------------------------------------------------------------------
         // Delta time: tempo decorrido desde o quadro anterior.
         // Toda movimentacao do jogo e multiplicada por ele, para que a
@@ -412,50 +408,24 @@ int main(int argc, char* argv[])
         if (g_DeltaTime > 0.1f)
             g_DeltaTime = 0.1f;
 
-        // Camera provisoria: look-at orbitando o centro da sala. Sera
-        // substituida pela camera em primeira pessoa no marco M1.
-        float r = g_CameraDistance;
-        float y = r*sin(g_CameraPhi);
-        float z = r*cos(g_CameraPhi)*cos(g_CameraTheta);
-        float x = r*cos(g_CameraPhi)*sin(g_CameraTheta);
-
-        glm::vec4 camera_lookat_l    = glm::vec4(0.0f, Room::HEIGHT*0.5f, 0.0f, 1.0f);
-        glm::vec4 camera_position_c  = camera_lookat_l + glm::vec4(x, y, z, 0.0f);
-        glm::vec4 camera_view_vector = camera_lookat_l - camera_position_c;
-        glm::vec4 camera_up_vector   = glm::vec4(0.0f,1.0f,0.0f,0.0f);
-
-        // Computamos a matriz "View" utilizando os parâmetros da câmera para
-        // definir o sistema de coordenadas da câmera.  Veja slides 2-14, 184-190 e 236-242 do documento Aula_08_Sistemas_de_Coordenadas.pdf.
-        glm::mat4 view = Matrix_Camera_View(camera_position_c, camera_view_vector, camera_up_vector);
-
-        // Agora computamos a matriz de Projeção.
-        glm::mat4 projection;
-
-        // Note que, no sistema de coordenadas da câmera, os planos near e far
-        // estão no sentido negativo! Veja slides 176-204 do documento Aula_09_Projecoes.pdf.
-        float nearplane = -0.1f;  // Posição do "near plane"
-        float farplane  = -60.0f; // Posição do "far plane"
-
-        if (g_UsePerspectiveProjection)
+        // ------------------------------------------------------------------
+        // Fisica do jogador e atualizacao da camera (M1 - Andar).
+        // As AABBs solidas sao recalculadas a cada quadro e passadas para
+        // UpdatePlayer, que aplica gravidade por Euler semi-implicito e
+        // resolve colisoes jogador x cena eixo por eixo em collisions.cpp.
+        // ------------------------------------------------------------------
+        std::vector<AABB> solid_boxes = BuildSolidAABBs();
+        if (g_Camera.mode == CAM_FIRST_PERSON)
         {
-            // Projeção Perspectiva.
-            // Para definição do field of view (FOV), veja slides 205-215 do documento Aula_09_Projecoes.pdf.
-            float field_of_view = 3.141592 / 3.0f;
-            projection = Matrix_Perspective(field_of_view, g_ScreenRatio, nearplane, farplane);
+            UpdatePlayer(g_Player, g_PlayerInput, g_Camera.yaw,
+                         solid_boxes, g_DeltaTime);
+            g_Camera.eye = PlayerEyePosition(g_Player);
         }
-        else
-        {
-            // Projeção Ortográfica.
-            // Para definição dos valores l, r, b, t ("left", "right", "bottom", "top"),
-            // PARA PROJEÇÃO ORTOGRÁFICA veja slides 219-224 do documento Aula_09_Projecoes.pdf.
-            // Para simular um "zoom" ortográfico, computamos o valor de "t"
-            // utilizando a variável g_CameraDistance.
-            float t = 1.5f*g_CameraDistance/2.5f;
-            float b = -t;
-            float r = t*g_ScreenRatio;
-            float l = -r;
-            projection = Matrix_Orthographic(l, r, b, t, nearplane, farplane);
-        }
+
+        glm::vec4 camera_position_c = CameraEyePosition(g_Camera);
+        glm::mat4 view              = CameraViewMatrix(g_Camera);
+        glm::mat4 projection        = CameraProjectionMatrix(
+            g_Camera, g_ScreenRatio, g_UsePerspectiveProjection);
 
         // Enviamos as matrizes "view" e "projection" para a GPU.
         glUniformMatrix4fv(g_view_uniform       , 1 , GL_FALSE , glm::value_ptr(view));
@@ -476,8 +446,15 @@ int main(int argc, char* argv[])
         for (size_t i = 0; i < g_Instances.size(); ++i)
             DrawInstance(g_Instances[i]);
 
-        // Imprimimos na tela os ângulos de Euler que controlam a rotação do
-        // terceiro cubo.
+        // Mira central (+) no modo de 1a pessoa.
+        if (g_Camera.mode == CAM_FIRST_PERSON)
+        {
+            float cw = TextRendering_CharWidth(window);
+            float lh = TextRendering_LineHeight(window);
+            TextRendering_PrintString(window, "+", -0.5f * cw, -0.5f * lh, 1.0f);
+        }
+
+        // Informacoes de estado do jogador e da camera no canto inferior.
         TextRendering_ShowEulerAngles(window);
 
         // Imprimimos na informação sobre a matriz de projeção sendo utilizada.
@@ -1166,50 +1143,29 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 {
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
     {
-        // Se o usuário pressionou o botão esquerdo do mouse, guardamos a
-        // posição atual do cursor nas variáveis g_LastCursorPosX e
-        // g_LastCursorPosY.  Também, setamos a variável
-        // g_LeftMouseButtonPressed como true, para saber que o usuário está
-        // com o botão esquerdo pressionado.
         glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
         g_LeftMouseButtonPressed = true;
     }
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
     {
-        // Quando o usuário soltar o botão esquerdo do mouse, atualizamos a
-        // variável abaixo para false.
         g_LeftMouseButtonPressed = false;
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)
     {
-        // Se o usuário pressionou o botão esquerdo do mouse, guardamos a
-        // posição atual do cursor nas variáveis g_LastCursorPosX e
-        // g_LastCursorPosY.  Também, setamos a variável
-        // g_RightMouseButtonPressed como true, para saber que o usuário está
-        // com o botão esquerdo pressionado.
         glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
         g_RightMouseButtonPressed = true;
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE)
     {
-        // Quando o usuário soltar o botão esquerdo do mouse, atualizamos a
-        // variável abaixo para false.
         g_RightMouseButtonPressed = false;
     }
     if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS)
     {
-        // Se o usuário pressionou o botão esquerdo do mouse, guardamos a
-        // posição atual do cursor nas variáveis g_LastCursorPosX e
-        // g_LastCursorPosY.  Também, setamos a variável
-        // g_MiddleMouseButtonPressed como true, para saber que o usuário está
-        // com o botão esquerdo pressionado.
         glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
         g_MiddleMouseButtonPressed = true;
     }
     if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_RELEASE)
     {
-        // Quando o usuário soltar o botão esquerdo do mouse, atualizamos a
-        // variável abaixo para false.
         g_MiddleMouseButtonPressed = false;
     }
 }
@@ -1218,86 +1174,32 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 // cima da janela OpenGL.
 void CursorPosCallback(GLFWwindow* window, double xpos, double ypos)
 {
-    // Abaixo executamos o seguinte: caso o botão esquerdo do mouse esteja
-    // pressionado, computamos quanto que o mouse se movimento desde o último
-    // instante de tempo, e usamos esta movimentação para atualizar os
-    // parâmetros que definem a posição da câmera dentro da cena virtual.
-    // Assim, temos que o usuário consegue controlar a câmera.
-
-    if (g_LeftMouseButtonPressed)
+    if (g_FirstMouse)
     {
-        // Deslocamento do cursor do mouse em x e y de coordenadas de tela!
-        float dx = xpos - g_LastCursorPosX;
-        float dy = ypos - g_LastCursorPosY;
-    
-        // Atualizamos parâmetros da câmera com os deslocamentos
-        g_CameraTheta -= 0.01f*dx;
-        g_CameraPhi   += 0.01f*dy;
-    
-        // Em coordenadas esféricas, o ângulo phi deve ficar entre -pi/2 e +pi/2.
-        float phimax = 3.141592f/2;
-        float phimin = -phimax;
-    
-        if (g_CameraPhi > phimax)
-            g_CameraPhi = phimax;
-    
-        if (g_CameraPhi < phimin)
-            g_CameraPhi = phimin;
-    
-        // Atualizamos as variáveis globais para armazenar a posição atual do
-        // cursor como sendo a última posição conhecida do cursor.
         g_LastCursorPosX = xpos;
         g_LastCursorPosY = ypos;
+        g_FirstMouse     = false;
+        return;
     }
 
-    if (g_RightMouseButtonPressed)
-    {
-        // Deslocamento do cursor do mouse em x e y de coordenadas de tela!
-        float dx = xpos - g_LastCursorPosX;
-        float dy = ypos - g_LastCursorPosY;
-    
-        // Atualizamos parâmetros da antebraço com os deslocamentos
-        g_ForearmAngleZ -= 0.01f*dx;
-        g_ForearmAngleX += 0.01f*dy;
-    
-        // Atualizamos as variáveis globais para armazenar a posição atual do
-        // cursor como sendo a última posição conhecida do cursor.
-        g_LastCursorPosX = xpos;
-        g_LastCursorPosY = ypos;
-    }
+    float dx = (float)(xpos - g_LastCursorPosX);
+    float dy = (float)(ypos - g_LastCursorPosY);
+    g_LastCursorPosX = xpos;
+    g_LastCursorPosY = ypos;
 
-    if (g_MiddleMouseButtonPressed)
+    // No modo de cursor capturado (padrao da 1a pessoa) o simples movimento do
+    // mouse gira a camera; se o cursor estiver solto (TAB), ainda e possivel
+    // girar segurando o botao esquerdo.
+    if (g_CursorLocked || g_LeftMouseButtonPressed)
     {
-        // Deslocamento do cursor do mouse em x e y de coordenadas de tela!
-        float dx = xpos - g_LastCursorPosX;
-        float dy = ypos - g_LastCursorPosY;
-    
-        // Atualizamos parâmetros da antebraço com os deslocamentos
-        g_TorsoPositionX += 0.01f*dx;
-        g_TorsoPositionY -= 0.01f*dy;
-    
-        // Atualizamos as variáveis globais para armazenar a posição atual do
-        // cursor como sendo a última posição conhecida do cursor.
-        g_LastCursorPosX = xpos;
-        g_LastCursorPosY = ypos;
+        CameraProcessMouse(g_Camera, dx, dy);
     }
 }
 
 // Função callback chamada sempre que o usuário movimenta a "rodinha" do mouse.
 void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 {
-    // Atualizamos a distância da câmera para a origem utilizando a
-    // movimentação da "rodinha", simulando um ZOOM.
-    g_CameraDistance -= 0.1f*yoffset;
-
-    // Uma câmera look-at nunca pode estar exatamente "em cima" do ponto para
-    // onde ela está olhando, pois isto gera problemas de divisão por zero na
-    // definição do sistema de coordenadas da câmera. Isto é, a variável abaixo
-    // nunca pode ser zero. Versões anteriores deste código possuíam este bug,
-    // o qual foi detectado pelo aluno Vinicius Fraga (2017/2).
-    const float verysmallnumber = std::numeric_limits<float>::epsilon();
-    if (g_CameraDistance < verysmallnumber)
-        g_CameraDistance = verysmallnumber;
+    CameraProcessScroll(g_Camera, (float)yoffset);
 }
 
 void Correcao_KeyCallback(int key, int action, int mod);
@@ -1316,40 +1218,53 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mod)
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GL_TRUE);
 
-    // O código abaixo implementa a seguinte lógica:
-    //   Se apertar tecla X       então g_AngleX += delta;
-    //   Se apertar tecla shift+X então g_AngleX -= delta;
-    //   Se apertar tecla Y       então g_AngleY += delta;
-    //   Se apertar tecla shift+Y então g_AngleY -= delta;
-    //   Se apertar tecla Z       então g_AngleZ += delta;
-    //   Se apertar tecla shift+Z então g_AngleZ -= delta;
-
-    float delta = 3.141592 / 16; // 22.5 graus, em radianos.
-
-    if (key == GLFW_KEY_X && action == GLFW_PRESS)
+    // ------------------------------------------------------------------
+    // Controles de movimentacao do jogador (WASD + Espaco).
+    // Guardamos o estado pressionado/solto para que o deslocamento seja
+    // integrado continuamente a cada quadro multiplicado por g_DeltaTime.
+    // ------------------------------------------------------------------
+    if (key == GLFW_KEY_W)
     {
-        g_AngleX += (mod & GLFW_MOD_SHIFT) ? -delta : delta;
+        if (action == GLFW_PRESS)   g_PlayerInput.forward = true;
+        if (action == GLFW_RELEASE) g_PlayerInput.forward = false;
+    }
+    if (key == GLFW_KEY_S)
+    {
+        if (action == GLFW_PRESS)   g_PlayerInput.backward = true;
+        if (action == GLFW_RELEASE) g_PlayerInput.backward = false;
+    }
+    if (key == GLFW_KEY_A)
+    {
+        if (action == GLFW_PRESS)   g_PlayerInput.left = true;
+        if (action == GLFW_RELEASE) g_PlayerInput.left = false;
+    }
+    if (key == GLFW_KEY_D)
+    {
+        if (action == GLFW_PRESS)   g_PlayerInput.right = true;
+        if (action == GLFW_RELEASE) g_PlayerInput.right = false;
+    }
+    if (key == GLFW_KEY_SPACE)
+    {
+        if (action == GLFW_PRESS)   g_PlayerInput.jump = true;
+        if (action == GLFW_RELEASE) g_PlayerInput.jump = false;
     }
 
-    if (key == GLFW_KEY_Y && action == GLFW_PRESS)
+    // Tecla C: alterna entre a camera em 1a pessoa e a camera look-at.
+    if (key == GLFW_KEY_C && action == GLFW_PRESS)
     {
-        g_AngleY += (mod & GLFW_MOD_SHIFT) ? -delta : delta;
-    }
-    if (key == GLFW_KEY_Z && action == GLFW_PRESS)
-    {
-        g_AngleZ += (mod & GLFW_MOD_SHIFT) ? -delta : delta;
+        if (g_Camera.mode == CAM_FIRST_PERSON)
+            g_Camera.mode = CAM_LOOK_AT;
+        else
+            g_Camera.mode = CAM_FIRST_PERSON;
     }
 
-    // Se o usuário apertar a tecla espaço, resetamos os ângulos de Euler para zero.
-    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+    // Tecla TAB: prende/solta o cursor do mouse na janela.
+    if (key == GLFW_KEY_TAB && action == GLFW_PRESS)
     {
-        g_AngleX = 0.0f;
-        g_AngleY = 0.0f;
-        g_AngleZ = 0.0f;
-        g_ForearmAngleX = 0.0f;
-        g_ForearmAngleZ = 0.0f;
-        g_TorsoPositionX = 0.0f;
-        g_TorsoPositionY = 0.0f;
+        g_CursorLocked = !g_CursorLocked;
+        g_FirstMouse   = true;
+        glfwSetInputMode(window, GLFW_CURSOR,
+                         g_CursorLocked ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
     }
 
     // Se o usuário apertar a tecla P, utilizamos projeção perspectiva.
@@ -1447,8 +1362,8 @@ void TextRendering_ShowModelViewProjection(
     TextRendering_PrintMatrixVectorProductMoreDigits(window, viewport_mapping, p_ndc, -1.0f, 1.0f-26*pad, 1.0f);
 }
 
-// Escrevemos na tela os ângulos de Euler definidos nas variáveis globais
-// g_AngleX, g_AngleY, e g_AngleZ.
+// Exibe no canto inferior esquerdo a posicao e estado de apoio do jogador e
+// a orientacao (yaw/pitch) da camera.
 void TextRendering_ShowEulerAngles(GLFWwindow* window)
 {
     if ( !g_ShowInfoText )
@@ -1456,8 +1371,12 @@ void TextRendering_ShowEulerAngles(GLFWwindow* window)
 
     float pad = TextRendering_LineHeight(window);
 
-    char buffer[80];
-    snprintf(buffer, 80, "Euler Angles rotation matrix = Z(%.2f)*Y(%.2f)*X(%.2f)\n", g_AngleZ, g_AngleY, g_AngleX);
+    char buffer[120];
+    snprintf(buffer, sizeof(buffer),
+             "Pos: (%.2f, %.2f, %.2f) | Yaw: %.2f Pitch: %.2f | Chao: %s",
+             g_Player.pos.x, g_Player.pos.y, g_Player.pos.z,
+             g_Camera.yaw, g_Camera.pitch,
+             g_Player.on_ground ? "sim" : "nao");
 
     TextRendering_PrintString(window, buffer, -1.0f+pad/10, -1.0f+2*pad/10, 1.0f);
 }
@@ -1684,4 +1603,3 @@ void PrintObjModelInfo(ObjModel* model)
 
 // set makeprg=cd\ ..\ &&\ make\ run\ >/dev/null
 // vim: set spell spelllang=pt_br :
-

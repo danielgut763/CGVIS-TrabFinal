@@ -192,3 +192,127 @@ bool AABBOverlapsAny(const AABB& box, const std::vector<AABB>& boxes,
     }
     return false;
 }
+
+int FindBoxContainingPoint(const glm::vec3& p,
+                           const std::vector<AABB>& boxes,
+                           int skip_index)
+{
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        if ((int)i == skip_index)
+            continue;
+        if (AABBContainsPoint(boxes[i], p))
+            return (int)i;
+    }
+    return -1;
+}
+
+// Resolve o deslocamento da caixa "cur" ao longo de um unico eixo (0=X, 1=Y,
+// 2=Z), truncando o passo caso alguma caixa solida da lista fique no caminho.
+static float ResolveSingleAxis(AABB& cur, int axis, float move,
+                               const std::vector<AABB>& boxes,
+                               int skip_index, bool* out_hit)
+{
+    if (out_hit)
+        *out_hit = false;
+
+    if (move == 0.0f)
+        return 0.0f;
+
+    // Folga transversal: duas caixas que apenas se encostam face a face (por
+    // exemplo, os pes do jogador apoiados em y = piso.max.y) NAO devem ser
+    // tratadas como penetracao quando o movimento ocorre nos outros dois
+    // eixos (X e Z). Caso contrario, o proprio piso travaria a caminhada.
+    const float EPS = 1e-4f;
+
+    const int u = (axis + 1) % 3;
+    const int v = (axis + 2) % 3;
+
+    float allowed = move;
+    bool  hit     = false;
+
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        if ((int)i == skip_index)
+            continue;
+
+        const AABB& b = boxes[i];
+
+        // Precisa haver sobreposicao estrita nos dois eixos transversais.
+        if (cur.max[u] <= b.min[u] + EPS || cur.min[u] >= b.max[u] - EPS)
+            continue;
+        if (cur.max[v] <= b.min[v] + EPS || cur.min[v] >= b.max[v] - EPS)
+            continue;
+
+        if (move > 0.0f)
+        {
+            // Obstaculo a frente no sentido positivo do eixo.
+            if (cur.max[axis] <= b.min[axis] + EPS &&
+                cur.max[axis] + allowed > b.min[axis])
+            {
+                allowed = b.min[axis] - cur.max[axis];
+                if (allowed < 0.0f)
+                    allowed = 0.0f;
+                hit = true;
+            }
+        }
+        else
+        {
+            // Obstaculo a frente no sentido negativo do eixo.
+            if (cur.min[axis] >= b.max[axis] - EPS &&
+                cur.min[axis] + allowed < b.max[axis])
+            {
+                allowed = b.max[axis] - cur.min[axis];
+                if (allowed > 0.0f)
+                    allowed = 0.0f;
+                hit = true;
+            }
+        }
+    }
+
+    cur.min[axis] += allowed;
+    cur.max[axis] += allowed;
+
+    if (out_hit)
+        *out_hit = hit;
+
+    return allowed;
+}
+
+glm::vec3 ResolveAABBMovement(const AABB& box,
+                              const glm::vec3& delta,
+                              const std::vector<AABB>& boxes,
+                              int skip_index,
+                              bool out_hit_axis[3])
+{
+    if (out_hit_axis)
+    {
+        out_hit_axis[0] = false;
+        out_hit_axis[1] = false;
+        out_hit_axis[2] = false;
+    }
+
+    AABB      cur = box;
+    glm::vec3 applied(0.0f);
+
+    // Se o jogador esta subindo (pulo), resolvemos Y primeiro para que os pes
+    // ganhem altura antes de avancar sobre a borda de um objeto; se esta
+    // caindo ou caminhando no plano, resolvemos X e Z primeiro e apoiamos Y
+    // por ultimo. A separacao por eixo garante deslizamento suave ao longo das
+    // paredes sem travar nas quinas.
+    const int order_up[3]   = { 1, 0, 2 };
+    const int order_down[3] = { 0, 2, 1 };
+    const int* order = (delta.y > 0.0f) ? order_up : order_down;
+
+    for (int k = 0; k < 3; ++k)
+    {
+        int  axis = order[k];
+        bool hit  = false;
+        applied[axis] = ResolveSingleAxis(cur, axis, delta[axis],
+                                          boxes, skip_index, &hit);
+        if (out_hit_axis)
+            out_hit_axis[axis] = hit;
+    }
+
+    return applied;
+}
