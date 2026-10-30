@@ -54,6 +54,9 @@
 #include "collisions.h"
 #include "camera.h"
 #include "player.h"
+#include "grab.h"
+#include "camera.h"
+#include "player.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
@@ -126,7 +129,7 @@ void LoadShadersFromFiles(); // Carrega os shaders de vértice e fragmento, cria
 void LoadTextureImage(const char* filename); // Função que carrega imagens de textura
 void DrawVirtualObject(const char* object_name); // Desenha um objeto armazenado em g_VirtualScene
 void DrawInstance(const Instance& inst);           // Desenha uma instancia da cena (ver scene.h)
-std::vector<AABB> BuildSolidAABBs();               // AABBs em mundo de todas as instancias solidas
+std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box = NULL); // AABBs solidas; opcionalmente, a instancia de cada caixa
 GLuint LoadShader_Vertex(const char* filename);   // Carrega um vertex shader
 GLuint LoadShader_Fragment(const char* filename); // Carrega um fragment shader
 void LoadShader(const char* filename, GLuint shader_id); // Função utilizada pelas duas acima
@@ -202,6 +205,20 @@ bool g_MiddleMouseButtonPressed = false; // Análogo para botão do meio do mous
 // Estado da camera (1a pessoa + look-at) e do jogador (M1 - Andar).
 Camera      g_Camera;
 Player      g_Player;
+
+// Estado da mecanica de perspectiva forcada (M2). Ver grab.h.
+GrabState   g_Grab;
+
+// Teclas Q e E: giram o objeto que esta na mao.
+bool        g_RotateObjLeft  = false;
+bool        g_RotateObjRight = false;
+
+// Clique pendente de tratamento. O picking precisa da lista de AABBs da cena,
+// que so existe dentro do laco principal, entao o callback apenas registra o
+// pedido e a posicao do cursor em NDC; quem resolve e o laco.
+bool        g_GrabRequest = false;
+double      g_GrabNdcX    = 0.0;
+double      g_GrabNdcY    = 0.0;
 PlayerInput g_PlayerInput = { false, false, false, false, false };
 bool        g_CursorLocked = true;
 bool        g_FirstMouse   = true;
@@ -348,6 +365,7 @@ int main(int argc, char* argv[])
     // saida elevada.
     PlayerInit(g_Player, glm::vec3(-2.8f, 0.0f, 0.0f));
     CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
+    GrabInit(g_Grab);
 
     {
         std::vector<AABB> boxes = BuildSolidAABBs();
@@ -414,13 +432,47 @@ int main(int argc, char* argv[])
         // UpdatePlayer, que aplica gravidade por Euler semi-implicito e
         // resolve colisoes jogador x cena eixo por eixo em collisions.cpp.
         // ------------------------------------------------------------------
-        std::vector<AABB> solid_boxes = BuildSolidAABBs();
+        std::vector<int>  box_instance;
+        std::vector<AABB> solid_boxes = BuildSolidAABBs(&box_instance);
         if (g_Camera.mode == CAM_FIRST_PERSON)
         {
             UpdatePlayer(g_Player, g_PlayerInput, g_Camera.yaw,
                          solid_boxes, g_DeltaTime);
             g_Camera.eye = PlayerEyePosition(g_Player);
         }
+
+        // Clique pendente: pega o objeto sob o cursor, ou solta o que esta na
+        // mao. Tratado aqui porque depende das AABBs deste quadro.
+        if (g_GrabRequest)
+        {
+            g_GrabRequest = false;
+
+            if (GrabIsHolding(g_Grab))
+                GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance);
+            else
+                GrabTryPick(g_Grab, g_Camera, g_ScreenRatio,
+                            (float)g_GrabNdcX, (float)g_GrabNdcY,
+                            solid_boxes, box_instance);
+        }
+
+        // ------------------------------------------------------------------
+        // Mecanica de perspectiva forcada (M2).
+        //
+        // Rotacao do objeto na mao (Q e E) e, em seguida, recalculo da sua
+        // posicao e escala. Ambas multiplicadas por g_DeltaTime, para que a
+        // velocidade nao dependa da maquina.
+        // ------------------------------------------------------------------
+        if (GrabIsHolding(g_Grab))
+        {
+            float spin = 0.0f;
+            if (g_RotateObjLeft)  spin += 1.0f;
+            if (g_RotateObjRight) spin -= 1.0f;
+
+            if (spin != 0.0f)
+                GrabRotate(g_Grab, spin * GrabConfig::ROTATE_SPEED * g_DeltaTime);
+        }
+
+        GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance);
 
         glm::vec4 camera_position_c = CameraEyePosition(g_Camera);
         glm::mat4 view              = CameraViewMatrix(g_Camera);
@@ -452,6 +504,17 @@ int main(int argc, char* argv[])
             float cw = TextRendering_CharWidth(window);
             float lh = TextRendering_LineHeight(window);
             TextRendering_PrintString(window, "+", -0.5f * cw, -0.5f * lh, 1.0f);
+        }
+
+        // Estado da mecanica, util na demonstracao e na depuracao.
+        if (GrabIsHolding(g_Grab))
+        {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "Carregando  |  distancia %.2f m  |  escala x%.2f%s",
+                     g_Grab.cur_distance, g_Grab.cur_factor,
+                     g_Grab.blocked ? "  |  SEM ESPACO" : "");
+            TextRendering_PrintString(window, buf, -0.98f, 0.90f, 1.0f);
         }
 
         // Informacoes de estado do jogador e da camera no canto inferior.
@@ -595,10 +658,16 @@ void DrawInstance(const Instance& inst)
 // Devolve a AABB em coordenadas de mundo de cada instancia solida da cena.
 // A bounding box LOCAL vem de g_VirtualScene, preenchida pelo carregador de
 // OBJ; AABBTransform (collisions.cpp) leva os 8 cantos para mundo.
-std::vector<AABB> BuildSolidAABBs()
+std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box)
 {
     std::vector<AABB> boxes;
     boxes.reserve(g_Instances.size());
+
+    if (out_instance_of_box)
+    {
+        out_instance_of_box->clear();
+        out_instance_of_box->reserve(g_Instances.size());
+    }
 
     for (size_t i = 0; i < g_Instances.size(); ++i)
     {
@@ -614,9 +683,28 @@ std::vector<AABB> BuildSolidAABBs()
         boxes.push_back(AABBTransform(it->second.bbox_min,
                                       it->second.bbox_max,
                                       InstanceModelMatrix(inst)));
+
+        // As instancias nao solidas sao puladas, entao o indice da caixa NAO e
+        // o indice da instancia. Este vetor paralelo faz a correspondencia,
+        // necessaria para o picking saber qual objeto foi atingido.
+        if (out_instance_of_box)
+            out_instance_of_box->push_back((int)i);
     }
 
     return boxes;
+}
+
+// Bounding box LOCAL de uma malha ja carregada. Declarada em grab.h para que
+// aquele modulo nao precise conhecer g_VirtualScene nem OpenGL.
+bool GetMeshLocalBBox(const std::string& mesh, glm::vec3* out_min, glm::vec3* out_max)
+{
+    std::map<std::string, SceneObject>::const_iterator it = g_VirtualScene.find(mesh);
+    if (it == g_VirtualScene.end())
+        return false;
+
+    if (out_min) *out_min = it->second.bbox_min;
+    if (out_max) *out_max = it->second.bbox_max;
+    return true;
 }
 
 void LoadShadersFromFiles()
@@ -1145,6 +1233,33 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
     {
         glfwGetCursorPos(window, &g_LastCursorPosX, &g_LastCursorPosY);
         g_LeftMouseButtonPressed = true;
+
+        // Pegar / soltar objeto (M2). So faz sentido na camera em 1a pessoa.
+        if (g_Camera.mode == CAM_FIRST_PERSON)
+        {
+            if (g_CursorLocked)
+            {
+                // Cursor capturado: a mira e o "+" no centro da tela.
+                g_GrabNdcX = 0.0;
+                g_GrabNdcY = 0.0;
+            }
+            else
+            {
+                // Cursor livre: usamos a posicao real do ponteiro, convertida
+                // para NDC. O eixo Y da tela cresce para baixo e o de NDC para
+                // cima, por isso o sinal invertido.
+                int w = 0, h = 0;
+                glfwGetWindowSize(window, &w, &h);
+
+                double cx = 0.0, cy = 0.0;
+                glfwGetCursorPos(window, &cx, &cy);
+
+                g_GrabNdcX = (w > 0) ? (2.0*cx/(double)w - 1.0) : 0.0;
+                g_GrabNdcY = (h > 0) ? (1.0 - 2.0*cy/(double)h) : 0.0;
+            }
+
+            g_GrabRequest = true;
+        }
     }
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
     {
@@ -1199,7 +1314,14 @@ void CursorPosCallback(GLFWwindow* window, double xpos, double ypos)
 // Função callback chamada sempre que o usuário movimenta a "rodinha" do mouse.
 void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 {
-    CameraProcessScroll(g_Camera, (float)yoffset);
+    // Com um objeto na mao, a roda aproxima ou afasta o objeto. Como a escala
+    // e derivada da distancia, isso e justamente o que o jogador percebe como
+    // "aumentar e diminuir" o objeto. O FOV fica travado nesse estado, porque
+    // a invariante de tamanho aparente depende dele.
+    if (GrabIsHolding(g_Grab))
+        GrabAdjustReach(g_Grab, (float)yoffset);
+    else
+        CameraProcessScroll(g_Camera, (float)yoffset);
 }
 
 void Correcao_KeyCallback(int key, int action, int mod);
@@ -1250,6 +1372,19 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mod)
     }
 
     // Tecla C: alterna entre a camera em 1a pessoa e a camera look-at.
+    // Q e E giram o objeto que esta na mao (transformacao de rotacao
+    // controlada pelo usuario, aplicada ao OBJETO e nao a camera).
+    if (key == GLFW_KEY_Q)
+    {
+        if (action == GLFW_PRESS)   g_RotateObjLeft = true;
+        if (action == GLFW_RELEASE) g_RotateObjLeft = false;
+    }
+    if (key == GLFW_KEY_E)
+    {
+        if (action == GLFW_PRESS)   g_RotateObjRight = true;
+        if (action == GLFW_RELEASE) g_RotateObjRight = false;
+    }
+
     if (key == GLFW_KEY_C && action == GLFW_PRESS)
     {
         if (g_Camera.mode == CAM_FIRST_PERSON)

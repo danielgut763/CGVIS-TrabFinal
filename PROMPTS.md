@@ -81,3 +81,35 @@ Implemente a M1-andar do plano da entrega parcial, contido no plano.md
 
 **O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
 foi corrigido à mão e por quê>
+
+### 2026-10-30 — M2: picking, carregar objeto e perspectiva forçada
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/grab.h`, `src/grab.cpp`,
+`src/main.cpp`, `CMakeLists.txt`
+
+**Prompt:**
+
+```
+Marco M2 do plano de implementação, sobre o M1 já existente: criar um módulo
+grab com a mecânica de perspectiva forçada do Superliminal. Construir o raio
+do cursor a partir da base ortonormal da câmera (sem gluUnProject nem
+glm::unProject, que são proibidas); fazer picking por raio x AABB escolhendo
+o objeto marcado como grabbable; enquanto carregado, manter o objeto no mesmo
+ponto da tela com tamanho aparente constante, aplicando escala proporcional à
+distância; ao posicionar, não usar o ponto atingido pelo raio diretamente, e
+sim resolver a forma fechada d = t_hit / (1 + r0/d0) e depois refinar por
+busca binária testando a AABB do objeto contra a cena; travar o FOV enquanto
+carrega; permitir rotação do objeto na mão com Q e E e ajuste de alcance pela
+roda do mouse.
+```
+
+**Ferramenta:** Claude (Anthropic)
+
+**Validação:** a matemática foi conferida por um teste numérico fora do
+repositório, verificando escala proporcional à distância, invariância do raio
+angular, contato com a parede sem penetração e recuo diante de obstáculo
+lateral.
+
+**O que foi aproveitado:** <preencher após revisão>
