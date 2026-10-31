@@ -2,6 +2,7 @@
 #include "matrices.h"
 
 std::vector<Instance> g_Instances;
+int                   g_BezierInstance = -1;
 
 Material MakeMaterial(int texture_id, int uv_mode, float uv_scale,
                       float ks, float shininess)
@@ -42,6 +43,7 @@ static Instance Box(const glm::vec3& center, const glm::vec3& size,
 void BuildScene(std::vector<Instance>& out)
 {
     out.clear();
+    g_BezierInstance = -1;
 
     const float HX = Room::HALF_X;
     const float HZ = Room::HALF_Z;
@@ -77,6 +79,9 @@ void BuildScene(std::vector<Instance>& out)
         // trecho abaixo do vao (e o degrau que o jogador precisa alcancar)
         out.push_back(Box(glm::vec3(HX + T*0.5f, Room::EXIT_Y0*0.5f, 0.0f),
                           glm::vec3(T, Room::EXIT_Y0, Room::EXIT_WIDTH), wall_mat, true));
+        // patamar externo da saida, para o jogador poder pisar ao atravessar o vao
+        out.push_back(Box(glm::vec3(HX + T + 0.6f, Room::EXIT_Y0 - T*0.5f, 0.0f),
+                          glm::vec3(1.2f, T, Room::EXIT_WIDTH + 0.4f), floor_mat, true));
         // laterais, de altura cheia
         out.push_back(Box(glm::vec3(HX + T*0.5f, H*0.5f, -side_cz),
                           glm::vec3(T, H, side_w), wall_mat, true));
@@ -84,7 +89,7 @@ void BuildScene(std::vector<Instance>& out)
                           glm::vec3(T, H, side_w), wall_mat, true));
     }
 
-    // --- objetos de teste ---
+    // --- objetos da fase ---
 
     // Tres caixas da MESMA malha "the_cube", cada uma com a sua Model matrix.
     // E isto que atende o requisito de instancias de objetos.
@@ -104,27 +109,33 @@ void BuildScene(std::vector<Instance>& out)
         out.push_back(crate);
     }
 
-    // Coelho e esfera do template, so para confirmar que malhas de OBJ
-    // continuam entrando na cena pelo mesmo caminho das caixas.
+    // Coelho pousado sobre o piso (a malha tem bbox_min.y ~ -0.99, entao
+    // pos.y == scale.y apoia a base em y = 0) e pegavel na mecanica.
     {
         Instance bunny;
         bunny.mesh      = "the_bunny";
-        bunny.pos       = glm::vec3(-2.6f, 0.0f, 1.6f);
+        bunny.pos       = glm::vec3(-2.2f, 0.45f, 1.6f);
         bunny.yaw       = -0.6f;
-        bunny.scale     = glm::vec3(1.0f);
+        bunny.scale     = glm::vec3(0.45f);
         bunny.mat       = MakeMaterial(1, UV_PLANAR_XY, 1.0f, 0.15f, 20.0f);
         bunny.solid     = true;
-        bunny.grabbable = false;
+        bunny.grabbable = true;
         out.push_back(bunny);
+    }
 
+    // Objeto decorativo flutuante cuja movimentacao e controlada por uma
+    // curva de Bezier cubica (SPEC.md e M3 do plano): nao e solido nem pode
+    // ser pego pelo jogador.
+    {
         Instance sphere;
         sphere.mesh      = "the_sphere";
-        sphere.pos       = glm::vec3(2.4f, 0.6f, -1.9f);
+        sphere.pos       = glm::vec3(-1.6f, 2.2f, -2.0f);
         sphere.yaw       = 0.0f;
-        sphere.scale     = glm::vec3(0.6f);
+        sphere.scale     = glm::vec3(0.35f);
         sphere.mat       = MakeMaterial(1, UV_SPHERE, 1.0f, 0.35f, 48.0f);
-        sphere.solid     = true;
+        sphere.solid     = false;
         sphere.grabbable = false;
+        g_BezierInstance = (int)out.size();
         out.push_back(sphere);
     }
 }

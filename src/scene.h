@@ -56,6 +56,10 @@ glm::mat4 InstanceModelMatrix(const Instance& inst);
 // Lista global dos objetos desenhados a cada quadro.
 extern std::vector<Instance> g_Instances;
 
+// Indice em g_Instances do objeto decorativo flutuante que percorre a curva
+// de Bezier cubica (definido em BuildScene).
+extern int g_BezierInstance;
+
 // ---------------------------------------------------------------------------
 // Dimensoes da fase, em metros. Ficam aqui para que colisao, jogador e camera
 // usem os MESMOS numeros que a geometria desenhada.
@@ -64,7 +68,7 @@ namespace Room
 {
     const float HALF_X    = 4.0f;  // interior vai de -4 a +4 em X
     const float HALF_Z    = 3.0f;  // interior vai de -3 a +3 em Z
-    const float HEIGHT    = 3.0f;  // piso em y=0, teto em y=3
+    const float HEIGHT    = 4.0f;  // piso em y=0, teto em y=4 (deixa 2 m de altura livre no vao)
     const float THICKNESS = 0.2f;  // espessura de parede, piso e teto
 
     // Saida elevada, aberta na parede +X. Comeca acima da altura do jogador,

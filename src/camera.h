@@ -36,15 +36,30 @@ struct Camera
     float     mouse_sensitivity; // radianos por pixel de deslocamento do cursor
 
     // --- Estado da camera look-at ---
-    glm::vec3 lookat_target;     // ponto para onde a camera look-at olha
-    float     lookat_distance;   // raio da orbita em metros
-    float     lookat_theta;      // angulo horizontal da orbita
-    float     lookat_phi;        // angulo vertical da orbita
+    int       lookat_instance;    // indice em g_Instances do objeto observado (-1 se fixo)
+    glm::vec3 lookat_target;      // ponto para onde a camera look-at olha
+    float     lookat_distance;    // raio da orbita em metros
+    float     lookat_theta;       // angulo horizontal da orbita
+    float     lookat_phi;         // angulo vertical da orbita
+    float     lookat_orbit_speed; // velocidade angular da orbita por teclado (rad/s)
 };
 
 // Inicializa a camera em 1a pessoa na posicao e orientacao dadas.
 void CameraInit(Camera& cam, const glm::vec3& eye_pos,
                 float yaw_rad = 0.0f, float pitch_rad = 0.0f);
+
+// Entra no modo look-at apontando para "target_pos" (associado a instancia
+// "instance_index") e alinhando os angulos iniciais da orbita com a direcao
+// de onde o jogador estava olhando.
+void CameraEnterLookAt(Camera& cam, int instance_index, const glm::vec3& target_pos);
+
+// Atualiza o alvo da camera look-at (caso o objeto observado esteja em
+// movimento, como na curva de Bezier) e integra a rotacao da orbita pelo
+// teclado multiplicada por "dt" (requisito de animacao baseada no tempo).
+void CameraUpdateLookAt(Camera& cam, const glm::vec3& target_pos,
+                        bool orbit_left, bool orbit_right,
+                        bool orbit_up, bool orbit_down,
+                        float dt);
 
 // Atualiza a orientacao da camera a partir do deslocamento (dx, dy) do mouse
 // em pixels. Na 1a pessoa altera yaw/pitch; na look-at orbita theta/phi.

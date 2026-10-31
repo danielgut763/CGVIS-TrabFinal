@@ -55,8 +55,7 @@
 #include "camera.h"
 #include "player.h"
 #include "grab.h"
-#include "camera.h"
-#include "player.h"
+#include "bezier.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
@@ -130,6 +129,7 @@ void LoadTextureImage(const char* filename); // Função que carrega imagens de 
 void DrawVirtualObject(const char* object_name); // Desenha um objeto armazenado em g_VirtualScene
 void DrawInstance(const Instance& inst);           // Desenha uma instancia da cena (ver scene.h)
 std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box = NULL); // AABBs solidas; opcionalmente, a instancia de cada caixa
+glm::vec3 InstanceWorldCenter(int idx);            // Centro da AABB em mundo da instancia idx
 GLuint LoadShader_Vertex(const char* filename);   // Carrega um vertex shader
 GLuint LoadShader_Fragment(const char* filename); // Carrega um fragment shader
 void LoadShader(const char* filename, GLuint shader_id); // Função utilizada pelas duas acima
@@ -191,11 +191,6 @@ std::stack<glm::mat4>  g_MatrixStack;
 // Razão de proporção da janela (largura/altura). Veja função FramebufferSizeCallback().
 float g_ScreenRatio = 1.0f;
 
-// Ângulos de Euler que controlam a rotação de um dos cubos da cena virtual
-float g_AngleX = 0.0f;
-float g_AngleY = 0.0f;
-float g_AngleZ = 0.0f;
-
 // "g_LeftMouseButtonPressed = true" se o usuário está com o botão esquerdo do mouse
 // pressionado no momento atual. Veja função MouseButtonCallback().
 bool g_LeftMouseButtonPressed = false;
@@ -209,9 +204,16 @@ Player      g_Player;
 // Estado da mecanica de perspectiva forcada (M2). Ver grab.h.
 GrabState   g_Grab;
 
+// Estado da animacao por curva de Bezier cubica (M3). Ver bezier.h.
+BezierState g_Bezier;
+
 // Teclas Q e E: giram o objeto que esta na mao.
 bool        g_RotateObjLeft  = false;
 bool        g_RotateObjRight = false;
+
+// Pedidos pendentes de alternancia/troca de alvo da camera look-at (teclas C e V).
+bool        g_ToggleCameraRequest = false;
+bool        g_CycleLookAtRequest  = false;
 
 // Clique pendente de tratamento. O picking precisa da lista de AABBs da cena,
 // que so existe dentro do laco principal, entao o callback apenas registra o
@@ -360,12 +362,15 @@ int main(int argc, char* argv[])
     // Monta a lista de instancias da cena (ver scene.cpp).
     BuildScene(g_Instances);
 
-    // Inicializa jogador e camera em primeira pessoa: o jogador nasce perto da
+    // Inicializa jogador, camera em primeira pessoa, mecanica de pegar (M2) e
+    // animacao por curva de Bezier cubica (M3). O jogador nasce perto da
     // parede -X olhando para +X (yaw = 0), em direcao as caixas e ao vao da
     // saida elevada.
     PlayerInit(g_Player, glm::vec3(-2.8f, 0.0f, 0.0f));
     CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
     GrabInit(g_Grab);
+    BezierInit(g_Bezier, g_BezierInstance);
+    g_Camera.lookat_instance = g_BezierInstance;
 
     {
         std::vector<AABB> boxes = BuildSolidAABBs();
@@ -427,7 +432,68 @@ int main(int argc, char* argv[])
             g_DeltaTime = 0.1f;
 
         // ------------------------------------------------------------------
-        // Fisica do jogador e atualizacao da camera (M1 - Andar).
+        // Animacao por curva de Bezier cubica (M3), baseada em g_DeltaTime.
+        // ------------------------------------------------------------------
+        BezierUpdate(g_Bezier, g_DeltaTime);
+
+        // ------------------------------------------------------------------
+        // Alternancia entre camera em 1a pessoa e camera look-at (tecla C) e
+        // troca de objeto observado pela look-at (tecla V).
+        // Se o jogador estiver carregando um objeto, a camera look-at foca
+        // nele por padrao (PLANO.md); caso contrario, aponta para o objeto
+        // na curva de Bezier ou para os objetos interativos da sala.
+        // ------------------------------------------------------------------
+        if (g_ToggleCameraRequest)
+        {
+            g_ToggleCameraRequest = false;
+
+            if (g_Camera.mode == CAM_FIRST_PERSON)
+            {
+                int target_idx = g_Camera.lookat_instance;
+                if (GrabIsHolding(g_Grab))
+                    target_idx = g_Grab.instance;
+                else if (target_idx < 0 || target_idx >= (int)g_Instances.size())
+                    target_idx = (g_BezierInstance >= 0) ? g_BezierInstance : 0;
+
+                CameraEnterLookAt(g_Camera, target_idx, InstanceWorldCenter(target_idx));
+            }
+            else
+            {
+                g_Camera.mode = CAM_FIRST_PERSON;
+                g_Camera.eye  = PlayerEyePosition(g_Player);
+            }
+        }
+
+        if (g_CycleLookAtRequest)
+        {
+            g_CycleLookAtRequest = false;
+
+            std::vector<int> candidates;
+            if (g_BezierInstance >= 0 && g_BezierInstance < (int)g_Instances.size())
+                candidates.push_back(g_BezierInstance);
+            for (int i = 0; i < (int)g_Instances.size(); ++i)
+            {
+                if (g_Instances[i].grabbable && i != g_BezierInstance)
+                    candidates.push_back(i);
+            }
+
+            if (!candidates.empty())
+            {
+                int next_idx = candidates[0];
+                for (size_t k = 0; k < candidates.size(); ++k)
+                {
+                    if (candidates[k] == g_Camera.lookat_instance)
+                    {
+                        next_idx = candidates[(k + 1) % candidates.size()];
+                        break;
+                    }
+                }
+                CameraEnterLookAt(g_Camera, next_idx, InstanceWorldCenter(next_idx));
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Fisica do jogador e atualizacao da camera (M1 - Andar / M3 - Look-At).
         // As AABBs solidas sao recalculadas a cada quadro e passadas para
         // UpdatePlayer, que aplica gravidade por Euler semi-implicito e
         // resolve colisoes jogador x cena eixo por eixo em collisions.cpp.
@@ -440,6 +506,14 @@ int main(int argc, char* argv[])
                          solid_boxes, g_DeltaTime);
             g_Camera.eye = PlayerEyePosition(g_Player);
         }
+        else
+        {
+            glm::vec3 target_pos = InstanceWorldCenter(g_Camera.lookat_instance);
+            CameraUpdateLookAt(g_Camera, target_pos,
+                               g_PlayerInput.left, g_PlayerInput.right,
+                               g_PlayerInput.forward, g_PlayerInput.backward,
+                               g_DeltaTime);
+        }
 
         // Clique pendente: pega o objeto sob o cursor, ou solta o que esta na
         // mao. Tratado aqui porque depende das AABBs deste quadro.
@@ -448,7 +522,8 @@ int main(int argc, char* argv[])
             g_GrabRequest = false;
 
             if (GrabIsHolding(g_Grab))
-                GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance);
+                GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance,
+                               PlayerAABB(g_Player));
             else
                 GrabTryPick(g_Grab, g_Camera, g_ScreenRatio,
                             (float)g_GrabNdcX, (float)g_GrabNdcY,
@@ -472,7 +547,11 @@ int main(int argc, char* argv[])
                 GrabRotate(g_Grab, spin * GrabConfig::ROTATE_SPEED * g_DeltaTime);
         }
 
-        GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance);
+        if (g_Camera.mode == CAM_FIRST_PERSON)
+        {
+            GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance,
+                       PlayerAABB(g_Player));
+        }
 
         glm::vec4 camera_position_c = CameraEyePosition(g_Camera);
         glm::mat4 view              = CameraViewMatrix(g_Camera);
@@ -705,6 +784,25 @@ bool GetMeshLocalBBox(const std::string& mesh, glm::vec3* out_min, glm::vec3* ou
     if (out_min) *out_min = it->second.bbox_min;
     if (out_max) *out_max = it->second.bbox_max;
     return true;
+}
+
+// Centro da AABB em coordenadas de mundo para a instancia "idx". Usado pela
+// camera look-at para orbitar o centro geometrico real do objeto (mesmo quando
+// a origem do OBJ fica na base da malha, como no coelho).
+glm::vec3 InstanceWorldCenter(int idx)
+{
+    if (idx < 0 || idx >= (int)g_Instances.size())
+        return glm::vec3(0.0f, Room::HEIGHT * 0.5f, 0.0f);
+
+    const Instance& inst = g_Instances[idx];
+    glm::vec3 local_min, local_max;
+    if (GetMeshLocalBBox(inst.mesh, &local_min, &local_max))
+    {
+        AABB box = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
+        return AABBCenter(box);
+    }
+
+    return inst.pos;
 }
 
 void LoadShadersFromFiles()
@@ -1314,11 +1412,11 @@ void CursorPosCallback(GLFWwindow* window, double xpos, double ypos)
 // Função callback chamada sempre que o usuário movimenta a "rodinha" do mouse.
 void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset)
 {
-    // Com um objeto na mao, a roda aproxima ou afasta o objeto. Como a escala
-    // e derivada da distancia, isso e justamente o que o jogador percebe como
-    // "aumentar e diminuir" o objeto. O FOV fica travado nesse estado, porque
-    // a invariante de tamanho aparente depende dele.
-    if (GrabIsHolding(g_Grab))
+    // Em 1a pessoa com um objeto na mao, a roda aproxima ou afasta o objeto.
+    // Como a escala e derivada da distancia, isso e justamente o que o jogador
+    // percebe como "aumentar e diminuir" o objeto. Na camera look-at, a roda
+    // ajusta a distancia da orbita ao redor do objeto observado.
+    if (g_Camera.mode == CAM_FIRST_PERSON && GrabIsHolding(g_Grab))
         GrabAdjustReach(g_Grab, (float)yoffset);
     else
         CameraProcessScroll(g_Camera, (float)yoffset);
@@ -1385,12 +1483,15 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mod)
         if (action == GLFW_RELEASE) g_RotateObjRight = false;
     }
 
+    // Tecla C: alterna entre a camera em 1a pessoa e a camera look-at.
+    // Tecla V: troca o objeto observado pela camera look-at.
     if (key == GLFW_KEY_C && action == GLFW_PRESS)
     {
-        if (g_Camera.mode == CAM_FIRST_PERSON)
-            g_Camera.mode = CAM_LOOK_AT;
-        else
-            g_Camera.mode = CAM_FIRST_PERSON;
+        g_ToggleCameraRequest = true;
+    }
+    if (key == GLFW_KEY_V && action == GLFW_PRESS)
+    {
+        g_CycleLookAtRequest = true;
     }
 
     // Tecla TAB: prende/solta o cursor do mouse na janela.
@@ -1497,8 +1598,7 @@ void TextRendering_ShowModelViewProjection(
     TextRendering_PrintMatrixVectorProductMoreDigits(window, viewport_mapping, p_ndc, -1.0f, 1.0f-26*pad, 1.0f);
 }
 
-// Exibe no canto inferior esquerdo a posicao e estado de apoio do jogador e
-// a orientacao (yaw/pitch) da camera.
+// Exibe no canto inferior esquerdo o modo da camera, posicao e orientacao.
 void TextRendering_ShowEulerAngles(GLFWwindow* window)
 {
     if ( !g_ShowInfoText )
@@ -1506,12 +1606,28 @@ void TextRendering_ShowEulerAngles(GLFWwindow* window)
 
     float pad = TextRendering_LineHeight(window);
 
-    char buffer[120];
-    snprintf(buffer, sizeof(buffer),
-             "Pos: (%.2f, %.2f, %.2f) | Yaw: %.2f Pitch: %.2f | Chao: %s",
-             g_Player.pos.x, g_Player.pos.y, g_Player.pos.z,
-             g_Camera.yaw, g_Camera.pitch,
-             g_Player.on_ground ? "sim" : "nao");
+    char buffer[160];
+    if (g_Camera.mode == CAM_FIRST_PERSON)
+    {
+        snprintf(buffer, sizeof(buffer),
+                 "[1a Pessoa] Pos: (%.2f, %.2f, %.2f) | Yaw: %.2f Pitch: %.2f | Chao: %s | [C] Look-At",
+                 g_Player.pos.x, g_Player.pos.y, g_Player.pos.z,
+                 g_Camera.yaw, g_Camera.pitch,
+                 g_Player.on_ground ? "sim" : "nao");
+    }
+    else
+    {
+        const char* target_name = "cena";
+        if (g_Camera.lookat_instance == g_BezierInstance && g_BezierInstance >= 0)
+            target_name = "esfera (Bezier)";
+        else if (g_Camera.lookat_instance >= 0 && g_Camera.lookat_instance < (int)g_Instances.size())
+            target_name = g_Instances[g_Camera.lookat_instance].mesh.c_str();
+
+        snprintf(buffer, sizeof(buffer),
+                 "[Look-At: %s] Dist: %.2f | Theta: %.2f Phi: %.2f | [C] 1a Pessoa [V] Trocar alvo",
+                 target_name, g_Camera.lookat_distance,
+                 g_Camera.lookat_theta, g_Camera.lookat_phi);
+    }
 
     TextRendering_PrintString(window, buffer, -1.0f+pad/10, -1.0f+2*pad/10, 1.0f);
 }

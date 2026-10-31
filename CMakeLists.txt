@@ -12,6 +12,7 @@ set(SOURCES
   src/grab.cpp
   src/camera.cpp
   src/player.cpp
+  src/bezier.cpp
   src/correcao.cpp
   src/textrendering.cpp
   src/tiny_obj_loader.cpp

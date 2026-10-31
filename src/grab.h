@@ -88,13 +88,15 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
 // Recalcula a cada quadro a posicao e a escala do objeto carregado.
 void GrabUpdate(GrabState& g, const Camera& cam,
                 const std::vector<AABB>& boxes,
-                const std::vector<int>& box_instance);
+                const std::vector<int>& box_instance,
+                const AABB& player_box);
 
 // Solta o objeto na posicao atual. Devolve false (e continua segurando) se o
-// objeto nao couber ali sem atravessar a cena.
+// objeto nao couber ali sem atravessar a cena ou o proprio jogador.
 bool GrabTryRelease(GrabState& g, Camera& cam,
                     const std::vector<AABB>& boxes,
-                    const std::vector<int>& box_instance);
+                    const std::vector<int>& box_instance,
+                    const AABB& player_box);
 
 // Rotacao do objeto na mao (teclas Q e E), em radianos.
 void GrabRotate(GrabState& g, float delta_yaw);

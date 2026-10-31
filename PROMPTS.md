@@ -65,7 +65,7 @@ foi corrigido à mão e por quê>
 
 ### 2026-10-28 — M1: câmera 1ª pessoa, movimentação, gravidade e colisão por eixo
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `e25e579`
 
 **Arquivos gerados/alterados por IA:** `src/camera.h`, `src/camera.cpp`,
 `src/player.h`, `src/player.cpp`, `src/collisions.h`, `src/collisions.cpp`,
@@ -84,7 +84,7 @@ foi corrigido à mão e por quê>
 
 ### 2026-10-30 — M2: picking, carregar objeto e perspectiva forçada
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `db1af73`
 
 **Arquivos gerados/alterados por IA:** `src/grab.h`, `src/grab.cpp`,
 `src/main.cpp`, `CMakeLists.txt`
@@ -113,3 +113,22 @@ angular, contato com a parede sem penetração e recuo diante de obstáculo
 lateral.
 
 **O que foi aproveitado:** <preencher após revisão>
+
+### 2026-10-30 — M3: curva de Bézier cúbica, câmera look-at e fechamento da parcial
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/bezier.h`, `src/bezier.cpp`,
+`src/camera.h`, `src/camera.cpp`, `src/grab.h`, `src/grab.cpp`,
+`src/scene.h`, `src/scene.cpp`, `src/main.cpp`, `CMakeLists.txt`
+
+**Prompt:**
+
+```
+leia todos os arquivos para pegar o contexto do trabalho, e depois excute o passo M3-Fechar a parcial do plano
+```
+
+**Ferramenta:** Gemini (Google Antigravity)
+
+**O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
+foi corrigido à mão e por quê>

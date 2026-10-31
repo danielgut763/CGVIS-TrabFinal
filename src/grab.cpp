@@ -204,7 +204,8 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
 
 void GrabUpdate(GrabState& g, const Camera& cam,
                 const std::vector<AABB>& boxes,
-                const std::vector<int>& box_instance)
+                const std::vector<int>& box_instance,
+                const AABB& player_box)
 {
     if (!GrabIsHolding(g))
         return;
@@ -268,34 +269,46 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     if (d_min < GrabConfig::MIN_DISTANCE)
         d_min = GrabConfig::MIN_DISTANCE;
 
-    float d_max = std::min(d_wall, d_cap);
-    if (d_max < d_min)
-        d_max = d_min;
+    float d_max        = std::min(d_wall, d_cap);
+    bool  too_close    = (d_max < d_min);
+    float d            = d_min;
 
-    // O jogador ainda escolhe, com a roda do mouse, o quanto do alcance quer
-    // usar. Continua sendo escala derivada da distancia, so que a distancia
-    // tambem e controlavel.
-    float d = g.reach * d_max;
-    if (d < d_min) d = d_min;
-    if (d > d_max) d = d_max;
+    if (too_close)
+    {
+        // A parede atingida esta mais perto que d_min: nao empurramos d para
+        // d_min (o que atravessaria uma parede fina de 0.2 m e jogaria o
+        // objeto para fora da sala); mantemos o objeto aquem da parede e
+        // sinalizamos que nao ha espaco para soltar.
+        d = std::max(0.25f, d_max);
+    }
+    else
+    {
+        // O jogador ainda escolhe, com a roda do mouse, o quanto do alcance
+        // quer usar. Continua sendo escala derivada da distancia, so que a
+        // distancia tambem e controlavel.
+        d = g.reach * d_max;
+        if (d < d_min) d = d_min;
+        if (d > d_max) d = d_max;
+    }
 
     float yaw = g.yaw0 + g.yaw_offset;
 
     // -----------------------------------------------------------------------
-    // 3) Refinamento lateral.
+    // 3) Refinamento lateral e verificacao contra o corpo do jogador.
     //
     // A forma fechada acima so garante a direcao do raio. Num corredor
     // estreito, perto de um canto, ou com outro objeto ao lado, o volume ainda
     // pode penetrar de lado. Aqui recuamos por busca binaria ate caber.
     // -----------------------------------------------------------------------
+    AABB player_padded = AABBExpand(player_box, 0.02f);
     {
         glm::vec3 center = origin + dir*d;
         AABB      probe  = ObjectAABBAt(inst, local_min, local_max,
                                         yaw, g.s0*(d/g.d0), center);
 
-        if (AABBOverlapsAny(probe, boxes, skip))
+        if (!too_close && AABBOverlapsAny(probe, boxes, skip))
         {
-            float lo = d_min;  // assumido livre; se nao estiver, nada a fazer
+            float lo = d_min;
             float hi = d;
 
             for (int k = 0; k < GrabConfig::REFINE_STEPS; ++k)
@@ -312,16 +325,16 @@ void GrabUpdate(GrabState& g, const Camera& cam,
             }
 
             d = lo;
+        }
 
-            glm::vec3 c = origin + dir*d;
-            AABB b = ObjectAABBAt(inst, local_min, local_max,
-                                  yaw, g.s0*(d/g.d0), c);
-            g.blocked = AABBOverlapsAny(b, boxes, skip);
-        }
-        else
-        {
-            g.blocked = false;
-        }
+        glm::vec3 c = origin + dir*d;
+        AABB b = ObjectAABBAt(inst, local_min, local_max,
+                              yaw, g.s0*(d/g.d0), c);
+        AABB b_shrunk = AABBExpand(b, -GrabConfig::PLACE_MARGIN);
+
+        g.blocked = too_close
+                 || AABBOverlapsAny(b_shrunk, boxes, skip)
+                 || AABBOverlap(b, player_padded);
     }
 
     // -----------------------------------------------------------------------
@@ -346,9 +359,13 @@ void GrabUpdate(GrabState& g, const Camera& cam,
 
 bool GrabTryRelease(GrabState& g, Camera& cam,
                     const std::vector<AABB>& boxes,
-                    const std::vector<int>& box_instance)
+                    const std::vector<int>& box_instance,
+                    const AABB& player_box)
 {
     if (!GrabIsHolding(g))
+        return false;
+
+    if (g.blocked)
         return false;
 
     Instance& inst = g_Instances[g.instance];
@@ -360,12 +377,14 @@ bool GrabTryRelease(GrabState& g, Camera& cam,
 
         AABB box = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
 
-        // Encolhemos um pouco a caixa antes de testar, para que apenas ENCOSTAR
-        // numa parede nao conte como penetracao.
-        if (AABBOverlapsAny(AABBExpand(box, -GrabConfig::PLACE_MARGIN), boxes, skip))
+        // Encolhemos um pouco a caixa antes de testar contra a cena para que
+        // apenas ENCOSTAR numa parede nao conte como penetracao, e testamos
+        // tambem contra a AABB do jogador para nunca prende-lo dentro do objeto.
+        if (AABBOverlapsAny(AABBExpand(box, -GrabConfig::PLACE_MARGIN), boxes, skip) ||
+            AABBOverlap(box, AABBExpand(player_box, 0.02f)))
         {
             // Nao cabe aqui: continua na mao, para nao deixar o objeto preso
-            // dentro da geometria.
+            // dentro da geometria ou travando o jogador.
             g.blocked = true;
             return false;
         }
@@ -383,7 +402,31 @@ void GrabRotate(GrabState& g, float delta_yaw)
 {
     if (!GrabIsHolding(g))
         return;
+
     g.yaw_offset += delta_yaw;
+
+    // Atualiza tambem a instancia imediatamente ao redor do centro da sua
+    // AABB, permitindo girar o objeto na mao mesmo enquanto inspecionado pela
+    // camera look-at.
+    if (g.instance >= 0 && g.instance < (int)g_Instances.size())
+    {
+        Instance& inst = g_Instances[g.instance];
+        glm::vec3 local_min, local_max;
+        if (GetMeshLocalBBox(inst.mesh, &local_min, &local_max))
+        {
+            AABB cur_box      = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
+            glm::vec3 center  = AABBCenter(cur_box);
+            glm::vec3 c_local = (local_min + local_max) * 0.5f;
+            float yaw         = g.yaw0 + g.yaw_offset;
+
+            inst.yaw = yaw;
+            inst.pos = InstancePosForCenter(yaw, inst.scale.x, c_local, center);
+        }
+        else
+        {
+            inst.yaw = g.yaw0 + g.yaw_offset;
+        }
+    }
 }
 
 void GrabAdjustReach(GrabState& g, float wheel)
