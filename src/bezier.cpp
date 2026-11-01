@@ -46,10 +46,10 @@ void BezierInit(BezierState& b, int instance_index)
     // Trajetoria tridimensional em "S" na metade superior da sala, visivel
     // logo a frente da posicao inicial do jogador e acima da area de
     // caminhada para funcionar como objeto flutuante decorativo (SPEC.md).
-    b.p0 = glm::vec3(-1.6f, 2.2f, -2.0f);
-    b.p1 = glm::vec3( 1.2f, 3.3f, -0.9f);
-    b.p2 = glm::vec3(-0.9f, 1.7f,  0.9f);
-    b.p3 = glm::vec3( 2.0f, 2.7f,  2.0f);
+    b.p0 = glm::vec3(-4.2f, 2.6f, -3.2f);
+    b.p1 = glm::vec3( 1.5f, 3.6f, -1.6f);
+    b.p2 = glm::vec3(-1.5f, 2.0f,  1.6f);
+    b.p3 = glm::vec3( 4.2f, 3.0f,  3.2f);
 
     b.t             = 0.0f;
     b.direction     = 1.0f;

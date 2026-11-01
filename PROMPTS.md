@@ -132,3 +132,153 @@ leia todos os arquivos para pegar o contexto do trabalho, e depois excute o pass
 
 **O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
 foi corrigido à mão e por quê>
+
+### 2026-10-31 — M4: shadow mapping (funcionalidade extra)
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/shadow.h`, `src/shadow.cpp`,
+`src/shader_shadow_vertex.glsl`, `src/shader_shadow_fragment.glsl`,
+`src/shader_fragment.glsl`, `src/main.cpp`, `CMakeLists.txt`
+
+**Prompt:**
+
+```
+Marco M4 do plano de implementação: implementar shadow mapping como a
+funcionalidade extra obrigatória, que o professor pediu explicitamente.
+Criar um módulo shadow com framebuffer e textura de profundidade, com as
+matrizes View e Projection da luz construídas por Matrix_Camera_View e
+Matrix_Perspective de matrices.h (sem funções prontas). Tratar a luz como um
+holofote no teto apontando para baixo, usando a mesma posição já usada no
+cálculo de iluminação para que sombra e sombreamento fiquem coerentes.
+Adicionar um par de shaders que só grava profundidade do ponto de vista da
+luz, e no fragment shader principal projetar o fragmento no espaço da luz,
+comparar profundidades com bias dependente da inclinação contra shadow acne e
+suavizar a borda com PCF 3x3. Renderizar o passo de profundidade depois de
+toda a lógica do quadro e antes do passo de cor, e permitir ligar e desligar
+a sombra por tecla.
+```
+
+**Ferramenta:** Claude (Anthropic)
+
+**Validação:** os dois programas de GPU foram compilados e linkados fora do
+jogo, via WebGL2 (GLSL ES 3.00, mais estrito que o 3.30 desktop), e a lista de
+uniforms ativos foi cruzada com os nomes buscados em main.cpp.
+
+**O que foi aproveitado:** <preencher após revisão>
+
+### 2026-10-31 — Correção do M4 e revisão visual da fase
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/shadow.h`, `src/shadow.cpp`,
+`src/shader_fragment.glsl`, `src/scene.h`, `src/scene.cpp`, `src/bezier.cpp`,
+`src/main.cpp`
+
+**Prompt:**
+
+```
+A sombra está cortando nas paredes e a iluminação não deixa claro de onde a
+luz vem. Corrigir e revisar o visual da fase: trocar o mapa de sombra de
+projeção perspectiva (cone a partir de uma luz dentro da sala, que nunca
+alcança o topo das paredes) para projeção ortográfica de uma luz direcional,
+com o volume ajustado à caixa que envolve a fase; usar ambiente hemisférico
+para as paredes não ficarem chapadas; criar uma luminária visível embutida no
+teto com material emissivo, que não projeta sombra; substituir as texturas de
+tijolo e terreno do cenário por texturas procedurais na paleta da imagem de
+referência do SPEC (paredes creme em painéis com juntas e rodapé verde, piso
+verde com grade, teto claro em painéis); e ampliar a sala para 12 x 9 x 4,2 m
+reduzindo o tamanho dos objetos, reposicionando a curva de Bézier e o jogador.
+```
+
+**Ferramenta:** Claude (Anthropic)
+
+**Validação:** os dois programas de GPU foram recompilados via WebGL2 e os
+uniforms cruzados com main.cpp. Um teste numérico fora do repositório
+confirmou que os 8 cantos da caixa da fase, o topo das quatro paredes e um
+objeto ampliado junto ao canto caem todos dentro do cubo NDC da luz — ou seja,
+não existe mais ponto fora do volume onde a sombra pudesse cortar.
+
+**Correção durante a revisão:** com a luz passando a ser direcional e vinda
+de cima, o teto da sala passou a bloquear a luz no passo de profundidade e
+toda a cena era declarada em sombra. Foi acrescentado o campo `casts_shadow`
+em `Instance`: a casca da sala e as luminárias recebem sombra mas não a
+projetam, e apenas os objetos da fase entram no passo de profundidade. A
+filtragem do mapa também passou de GL_LINEAR para GL_NEAREST, já que
+interpolar profundidades antes da comparação erra nas silhuetas.
+
+**Segunda correção:** as faces viradas para a luz apareciam escurecidas por
+shadow acne, porque faces quase de perfil ocupam poucos texels no mapa e a
+profundidade varia demais dentro de cada um. Foi adicionado *normal offset
+bias*: o ponto é deslocado ao longo da normal antes de ser projetado no espaço
+da luz, com deslocamento crescente conforme a luz fica rasante. As duas faixas
+de luminária foram unificadas em uma só, porque duas fontes visíveis
+contradiziam a direção única das sombras e o SPEC define uma luz principal.
+
+**Terceira correção (bug de estado de OpenGL):** o coelho e a esfera
+renderizavam pretos. Causa: `ShadowMapInit` criava a textura de profundidade
+sem chamar `glActiveTexture` antes, agindo sobre a unidade de textura que
+`LoadTextureImage` havia deixado ativa (a 1, do rocky_terrain); o
+`glBindTexture(..., 0)` do final desligava aquela unidade, e todo objeto que
+usava a imagem 1 passava a ler preto. Corrigido selecionando a unidade do mapa
+de sombra antes de criar a textura e restaurando a unidade 0 depois.
+
+**Quarta correção (modelo de luz):** uma luz direcional tem a mesma direção
+em todo ponto da sala, então objetos situados exatamente sob a luminária
+recebiam luz inclinada, o que é fisicamente impossível. A iluminação passou a
+usar uma LUZ EM LINHA: o shader procura, para cada fragmento, o ponto mais
+próximo do segmento que representa a faixa de luz, de modo que a direção varie
+com a posição — vertical sob a faixa, inclinada ao lado dela. Foi acrescentada
+atenuação linear fraca com a distância até o segmento. O mapa de sombra
+continua ortográfico, com direção própria quase vertical, porque uma projeção
+ortográfica exige uma direção única.
+
+**Ajuste de cena pedido:** a faixa central foi reduzida a 10% do tamanho e
+foi acrescentada uma segunda luminária, um pendente em cone na quina oposta à
+porta. O cone é uma malha nova (`data/cone.obj`) gerada por revolução com 32
+segmentos. Como a faixa curta passou a se comportar como fonte pontual, a sua
+atenuação ganhou termo quadrático, e as intensidades foram recalibradas
+medindo o render para não saturar. A segunda luz ilumina mas não projeta
+sombra: isso exigiria um segundo mapa de profundidade e um passo de
+renderização a mais por quadro.
+
+**Quinta correção (sombra onidirecional):** a sombra não acompanhava a luz.
+A iluminação usava a posição da luminária, mas o mapa de sombra usava uma
+direção fixa quase vertical, então a sombra caía sempre reto para baixo
+independentemente de onde o objeto estivesse em relação à lâmpada. Foi
+substituído por SHADOW CUBE MAP, um por luminária: seis renderizações de 90
+graus gravando a distância euclidiana até a primeira superfície em cada
+direção. A consulta no shader é feita por direção, então a sombra sai
+radialmente da fonte. As duas luzes passaram a ser pontuais, com a mesma
+posição usada no sombreamento e no mapa. Um cone único apontado para baixo não
+serviria: um objeto erguido perto do teto e longe do eixo fica a quase 90
+graus da lâmpada e cairia fora de qualquer cone possível.
+
+**Spotlight (a partir do material da disciplina):** a Aula 17-18, páginas 79
+a 88, define fonte pontual, spotlight e direcional, e dá o teste do cone — um
+ponto não é iluminado quando dot((p−l)/|p−l|, v) < cos(alpha). O pendente, que
+é uma cúpula em cone, passou de fonte pontual a spotlight apontando para
+baixo, com abertura de 45 graus e borda suavizada por smoothstep em vez do
+corte seco.
+
+**Rebalanceamento do ambiente:** com uma caixa grande tapando a luminária
+central, a sala quase não escurecia. A sombra estava correta; o que sustentava
+a cena era o termo ambiente, que representa luz já refletida e por isso não é
+cortado por sombra. Medindo quatro níveis no render, 0.30/0.17 com luzes em
+1.70 ficou como melhor ponto: bloquear a luz central passou a escurecer a sala
+em 29%, contra 22% antes, sem saturar a imagem. Também foram colocados tetos
+no normal offset, no bias e no raio do PCF, para que superfícies muito
+rasantes não descolem a sombra do objeto e para que sombras distantes não
+virem borrão.
+
+**Dois defeitos no passo de profundidade:** (1) o passo herdava o backface
+culling do desenho normal, então um objeto que ENVOLVE a luz não projetava
+sombra alguma — de dentro dele só se enxergam as faces de trás, que eram
+descartadas. Medido: caixa envolvendo a luminária escurecia a sala só 1,8%;
+com o culling desligado no passo de profundidade, 35,4%. (2) O near plane do
+cube map era 0,05 m, e qualquer parte de um objeto encostado na luminária era
+recortada e deixava de projetar; reduzido para 0,02 m, o que custa pouca
+precisão porque o mapa guarda distância em textura float e o z-buffer só
+ordena os objetos entre si.
+
+**O que foi aproveitado:** <preencher após revisão>

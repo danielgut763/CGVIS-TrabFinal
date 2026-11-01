@@ -55,6 +55,7 @@
 #include "camera.h"
 #include "player.h"
 #include "grab.h"
+#include "shadow.h"
 #include "bezier.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
@@ -128,6 +129,7 @@ void LoadShadersFromFiles(); // Carrega os shaders de vértice e fragmento, cria
 void LoadTextureImage(const char* filename); // Função que carrega imagens de textura
 void DrawVirtualObject(const char* object_name); // Desenha um objeto armazenado em g_VirtualScene
 void DrawInstance(const Instance& inst);           // Desenha uma instancia da cena (ver scene.h)
+void DrawMeshGeometry(const char* object_name);    // So a geometria, sem uniforms de material (passo de profundidade)
 std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box = NULL); // AABBs solidas; opcionalmente, a instancia de cada caixa
 glm::vec3 InstanceWorldCenter(int idx);            // Centro da AABB em mundo da instancia idx
 GLuint LoadShader_Vertex(const char* filename);   // Carrega um vertex shader
@@ -247,9 +249,38 @@ GLint g_ks_uniform;
 GLint g_shininess_uniform;
 
 // Uniforms de iluminacao
-GLint g_light_position_uniform;
+GLint g_pattern_uniform;
+GLint g_emissive_uniform;
+
+GLint g_light1_pos_uniform;
+GLint g_light1_color_uniform;
+GLint g_light2_pos_uniform;
+GLint g_light2_color_uniform;
+GLint g_light2_dir_uniform;
+GLint g_light2_cos_outer_uniform;
+GLint g_light2_cos_inner_uniform;
 GLint g_light_color_uniform;
+GLint g_ambient_sky_uniform;
+GLint g_ambient_ground_uniform;
 GLint g_camera_position_uniform;
+
+// Uniforms do shadow mapping no shader principal
+GLint g_shadow_far_uniform;
+GLint g_shadow_enabled_uniform;
+
+// Programa de GPU e uniforms do passo de profundidade (shader_shadow_*.glsl)
+GLuint g_ShadowProgramID = 0;
+GLint  g_shadow_model_uniform;
+GLint  g_shadow_face_uniform;
+GLint  g_shadow_lightpos_uniform;
+GLint  g_shadow_far_range_uniform;
+
+// Mapa de sombra e a tecla que o liga e desliga (util na apresentacao, para
+// mostrar a diferenca que a sombra faz na percepcao de tamanho).
+// Uma sombra onidirecional por luminaria.
+PointShadow g_Shadow1;   // faixa curta no centro do teto
+PointShadow g_Shadow2;   // pendente em cone na quina
+bool      g_ShadowEnabled = true;
 
 // Tempo decorrido desde o quadro anterior, em segundos. TODA movimentacao do
 // jogo deve ser multiplicada por esta variavel, para que a velocidade nao
@@ -359,6 +390,11 @@ int main(int argc, char* argv[])
     ComputeNormals(&cubemodel);
     BuildTrianglesAndAddToVirtualScene(&cubemodel);
 
+    // Cone gerado por revolucao, usado como luminaria pendente.
+    ObjModel conemodel("../../data/cone.obj");
+    ComputeNormals(&conemodel);
+    BuildTrianglesAndAddToVirtualScene(&conemodel);
+
     // Monta a lista de instancias da cena (ver scene.cpp).
     BuildScene(g_Instances);
 
@@ -366,9 +402,27 @@ int main(int argc, char* argv[])
     // animacao por curva de Bezier cubica (M3). O jogador nasce perto da
     // parede -X olhando para +X (yaw = 0), em direcao as caixas e ao vao da
     // saida elevada.
-    PlayerInit(g_Player, glm::vec3(-2.8f, 0.0f, 0.0f));
+    PlayerInit(g_Player, glm::vec3(-4.6f, 0.0f, 0.0f));
     CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
     GrabInit(g_Grab);
+
+    // Sombras onidirecionais, uma por luminaria. Cada uma grava, em seis
+    // faces de 90 graus, a distancia ate a primeira superficie em todas as
+    // direcoes ao redor da luz.
+    {
+        glm::vec3 lamp1 = (g_LampP0 + g_LampP1) * 0.5f;
+
+        bool ok1 = PointShadowInit(g_Shadow1, ShadowConfig::RESOLUTION,
+                                   ShadowConfig::TEXTURE_UNIT_1,
+                                   lamp1, ShadowConfig::FAR_RANGE);
+        bool ok2 = PointShadowInit(g_Shadow2, ShadowConfig::RESOLUTION,
+                                   ShadowConfig::TEXTURE_UNIT_2,
+                                   g_Lamp2Pos, ShadowConfig::FAR_RANGE);
+
+        printf("Shadow cube maps: %dx%d por face; luz 1 %s, luz 2 %s.\n",
+               ShadowConfig::RESOLUTION, ShadowConfig::RESOLUTION,
+               ok1 ? "ok" : "falhou", ok2 ? "ok" : "falhou");
+    }
     BezierInit(g_Bezier, g_BezierInstance);
     g_Camera.lookat_instance = g_BezierInstance;
 
@@ -558,16 +612,121 @@ int main(int argc, char* argv[])
         glm::mat4 projection        = CameraProjectionMatrix(
             g_Camera, g_ScreenRatio, g_UsePerspectiveProjection);
 
+        // ------------------------------------------------------------------
+        // Passo 1 do shadow mapping: renderiza a cena do ponto de vista da
+        // luz, gravando apenas profundidade no framebuffer do mapa.
+        //
+        // Tem que acontecer DEPOIS de toda a logica do quadro (Bezier, objeto
+        // carregado, jogador). Se fosse antes, o mapa ficaria um quadro
+        // atrasado e a sombra escorregaria visivelmente atras do objeto em
+        // movimento.
+        // ------------------------------------------------------------------
+        // ------------------------------------------------------------------
+        // Passo de profundidade: para cada luminaria, seis renderizacoes de
+        // 90 graus (uma por face do cube map), gravando a distancia ate a
+        // primeira superficie.
+        //
+        // Custa pouco: so os objetos da fase projetam sombra, e sao poucos.
+        // ------------------------------------------------------------------
+        int fb_w = 0, fb_h = 0;
+        glfwGetFramebufferSize(window, &fb_w, &fb_h);
+
+        if (g_ShadowEnabled)
+        {
+            glUseProgram(g_ShadowProgramID);
+
+            // Sem descarte de faces no passo de profundidade.
+            //
+            // Com backface culling, um objeto que ENVOLVE a luz nao projetaria
+            // sombra nenhuma: de dentro dele so se enxergam as faces de tras,
+            // que seriam descartadas. Como a mecanica do jogo permite crescer
+            // um objeto em cima da luminaria, esse caso acontece. Desenhando
+            // os dois lados, a face mais proxima sempre fica gravada.
+            glDisable(GL_CULL_FACE);
+
+            const PointShadow* lights[2] = { &g_Shadow1, &g_Shadow2 };
+
+            for (int k = 0; k < 2; ++k)
+            {
+                const PointShadow& sm = *lights[k];
+                if (!sm.ready)
+                    continue;
+
+                glUniform3f(g_shadow_lightpos_uniform,
+                            sm.position.x, sm.position.y, sm.position.z);
+                glUniform1f(g_shadow_far_range_uniform, sm.far_range);
+
+                for (int face = 0; face < 6; ++face)
+                {
+                    PointShadowBeginFace(sm, face);
+
+                    glm::mat4 face_matrix = PointShadowFaceMatrix(sm, face);
+                    glUniformMatrix4fv(g_shadow_face_uniform, 1, GL_FALSE,
+                                       glm::value_ptr(face_matrix));
+
+                    for (size_t i = 0; i < g_Instances.size(); ++i)
+                    {
+                        // So os objetos da fase bloqueiam a luz; a casca da
+                        // sala e as luminarias ficam de fora (ver scene.h).
+                        if (!g_Instances[i].casts_shadow)
+                            continue;
+
+                        glm::mat4 light_model = InstanceModelMatrix(g_Instances[i]);
+                        glUniformMatrix4fv(g_shadow_model_uniform, 1, GL_FALSE,
+                                           glm::value_ptr(light_model));
+                        DrawMeshGeometry(g_Instances[i].mesh.c_str());
+                    }
+                }
+            }
+
+            glEnable(GL_CULL_FACE);
+
+            PointShadowEnd(fb_w, fb_h);
+            glUseProgram(g_GpuProgramID);
+        }
+
+        // Deixa os dois cube maps acessiveis ao shader principal.
+        PointShadowBindForReading(g_Shadow1);
+        PointShadowBindForReading(g_Shadow2);
+        glUniform1f(g_shadow_far_uniform, ShadowConfig::FAR_RANGE);
+        glUniform1i(g_shadow_enabled_uniform,
+                    (g_ShadowEnabled && g_Shadow1.ready) ? 1 : 0);
+
         // Enviamos as matrizes "view" e "projection" para a GPU.
         glUniformMatrix4fv(g_view_uniform       , 1 , GL_FALSE , glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform , 1 , GL_FALSE , glm::value_ptr(projection));
 
         // Fonte de luz unica, proxima ao teto no centro da sala. Ela sera o
         // ponto de vista do shadow map quando as sombras entrarem (M4).
-        glm::vec4 light_position = glm::vec4(0.0f, Room::HEIGHT - 0.35f, 0.0f, 1.0f);
-        glUniform4f(g_light_position_uniform,
-                    light_position.x, light_position.y, light_position.z, 1.0f);
-        glUniform3f(g_light_color_uniform, 1.0f, 0.96f, 0.88f);
+        // Luminaria em faixa: mandamos os dois extremos do segmento. O
+        // shader procura o ponto mais proximo dele para cada fragmento, e por
+        // isso a direcao da luz varia pela sala em vez de ser a mesma em todo
+        // lugar.
+        // As duas luminarias, ambas pontuais. A posicao mandada aqui e a
+        // MESMA usada para montar o cube map de cada uma, entao sombreamento
+        // e sombra nunca discordam.
+        glm::vec3 lamp1 = (g_LampP0 + g_LampP1) * 0.5f;
+        glUniform4f(g_light1_pos_uniform, lamp1.x, lamp1.y, lamp1.z, 1.0f);
+        glUniform3f(g_light1_color_uniform, 1.70f, 1.66f, 1.52f);
+
+        glUniform4f(g_light2_pos_uniform,
+                    g_Lamp2Pos.x, g_Lamp2Pos.y, g_Lamp2Pos.z, 1.0f);
+        glUniform3f(g_light2_color_uniform, 1.70f, 1.66f, 1.52f);
+
+        // O pendente aponta para baixo, com abertura de 45 graus. A borda
+        // suaviza a partir de 34 graus.
+        glUniform4f(g_light2_dir_uniform, 0.0f, -1.0f, 0.0f, 0.0f);
+        glUniform1f(g_light2_cos_outer_uniform, 0.707f); // cos(45 graus)
+        glUniform1f(g_light2_cos_inner_uniform, 0.829f); // cos(34 graus)
+
+        // Ambiente hemisferico: mais claro vindo de cima que de baixo.
+        // Ambiente mais baixo de proposito. Ele representa luz que ja ricocheteou
+        // pela sala, entao NAO e cortado por sombra; se for alto demais, tapar
+        // uma luminaria quase nao muda nada, porque o ambiente sustenta a cena
+        // sozinho. Com estes valores, bloquear a luz central escurece a sala
+        // em cerca de 30%.
+        glUniform3f(g_ambient_sky_uniform,    0.30f, 0.30f, 0.29f);
+        glUniform3f(g_ambient_ground_uniform, 0.17f, 0.18f, 0.17f);
         glUniform4f(g_camera_position_uniform,
                     camera_position_c.x, camera_position_c.y, camera_position_c.z, 1.0f);
 
@@ -620,6 +779,9 @@ int main(int argc, char* argv[])
         // pela biblioteca GLFW.
         glfwPollEvents();
     }
+
+    PointShadowDestroy(g_Shadow1);
+    PointShadowDestroy(g_Shadow2);
 
     // Finalizamos o uso dos recursos do sistema operacional
     glfwTerminate();
@@ -720,6 +882,25 @@ void DrawVirtualObject(const char* object_name)
 //
 // Desenha uma instancia da cena: envia a Model matrix e os parametros do
 // material, e chama o desenho da malha correspondente.
+// Desenha apenas a geometria de uma malha, sem tocar em nenhum uniform de
+// material. Usada no passo de profundidade: la o programa de GPU ativo e o
+// de sombra, que nao possui os uniforms do shader principal, e escrever neles
+// com as localizacoes do outro programa corromperia estado.
+void DrawMeshGeometry(const char* object_name)
+{
+    std::map<std::string, SceneObject>::const_iterator it =
+        g_VirtualScene.find(object_name);
+    if (it == g_VirtualScene.end())
+        return;
+
+    glBindVertexArray(it->second.vertex_array_object_id);
+    glDrawElements(it->second.rendering_mode,
+                   it->second.num_indices,
+                   GL_UNSIGNED_INT,
+                   (void*)(it->second.first_index * sizeof(GLuint)));
+    glBindVertexArray(0);
+}
+
 void DrawInstance(const Instance& inst)
 {
     glm::mat4 model = InstanceModelMatrix(inst);
@@ -730,6 +911,8 @@ void DrawInstance(const Instance& inst)
     glUniform1i(g_tex_id_uniform,    inst.mat.texture_id);
     glUniform1f(g_ks_uniform,        inst.mat.ks);
     glUniform1f(g_shininess_uniform, inst.mat.shininess);
+    glUniform1i(g_pattern_uniform,   inst.mat.pattern);
+    glUniform1f(g_emissive_uniform,  inst.mat.emissive);
 
     DrawVirtualObject(inst.mesh.c_str());
 }
@@ -850,16 +1033,51 @@ void LoadShadersFromFiles()
     g_ks_uniform         = glGetUniformLocation(g_GpuProgramID, "ks");
     g_shininess_uniform  = glGetUniformLocation(g_GpuProgramID, "shininess");
 
-    g_light_position_uniform  = glGetUniformLocation(g_GpuProgramID, "light_position");
-    g_light_color_uniform     = glGetUniformLocation(g_GpuProgramID, "light_color");
+    g_pattern_uniform    = glGetUniformLocation(g_GpuProgramID, "pattern");
+    g_emissive_uniform   = glGetUniformLocation(g_GpuProgramID, "emissive");
+
+    g_light1_pos_uniform       = glGetUniformLocation(g_GpuProgramID, "light1_pos");
+    g_light1_color_uniform     = glGetUniformLocation(g_GpuProgramID, "light1_color");
+    g_light2_pos_uniform       = glGetUniformLocation(g_GpuProgramID, "light2_pos");
+    g_light2_color_uniform     = glGetUniformLocation(g_GpuProgramID, "light2_color");
+    g_light2_dir_uniform       = glGetUniformLocation(g_GpuProgramID, "light2_dir");
+    g_light2_cos_outer_uniform = glGetUniformLocation(g_GpuProgramID, "light2_cos_outer");
+    g_light2_cos_inner_uniform = glGetUniformLocation(g_GpuProgramID, "light2_cos_inner");
+    g_light_color_uniform      = glGetUniformLocation(g_GpuProgramID, "light_color");
+    g_ambient_sky_uniform     = glGetUniformLocation(g_GpuProgramID, "ambient_sky");
+    g_ambient_ground_uniform  = glGetUniformLocation(g_GpuProgramID, "ambient_ground");
     g_camera_position_uniform = glGetUniformLocation(g_GpuProgramID, "camera_position");
+
+    g_shadow_far_uniform         = glGetUniformLocation(g_GpuProgramID, "shadow_far");
+    g_shadow_enabled_uniform     = glGetUniformLocation(g_GpuProgramID, "shadow_enabled");
 
     // Variáveis em "shader_fragment.glsl" para acesso das imagens de textura
     glUseProgram(g_GpuProgramID);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage0"), 0);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage1"), 1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "ShadowCube1"),
+                ShadowConfig::TEXTURE_UNIT_1);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "ShadowCube2"),
+                ShadowConfig::TEXTURE_UNIT_2);
     glUseProgram(0);
+
+    // -----------------------------------------------------------------------
+    // Segundo programa de GPU: o passo de profundidade do shadow mapping.
+    // Ele renderiza a cena do ponto de vista da luz e nao produz cor nenhuma.
+    // -----------------------------------------------------------------------
+    GLuint shadow_vs = LoadShader_Vertex("../../src/shader_shadow_vertex.glsl");
+    GLuint shadow_fs = LoadShader_Fragment("../../src/shader_shadow_fragment.glsl");
+
+    if (g_ShadowProgramID != 0)
+        glDeleteProgram(g_ShadowProgramID);
+
+    g_ShadowProgramID = CreateGpuProgram(shadow_vs, shadow_fs);
+
+    g_shadow_model_uniform      = glGetUniformLocation(g_ShadowProgramID, "model");
+    g_shadow_face_uniform       = glGetUniformLocation(g_ShadowProgramID, "light_face_matrix");
+    g_shadow_lightpos_uniform   = glGetUniformLocation(g_ShadowProgramID, "light_position");
+    g_shadow_far_range_uniform  = glGetUniformLocation(g_ShadowProgramID, "far_range");
 }
 
 // Função que pega a matriz M e guarda a mesma no topo da pilha
@@ -1470,6 +1688,13 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mod)
     }
 
     // Tecla C: alterna entre a camera em 1a pessoa e a camera look-at.
+    // L liga e desliga a sombra, para demonstrar na apresentacao o quanto ela
+    // muda a percepcao de tamanho do objeto.
+    if (key == GLFW_KEY_L && action == GLFW_PRESS)
+    {
+        g_ShadowEnabled = !g_ShadowEnabled;
+    }
+
     // Q e E giram o objeto que esta na mao (transformacao de rotacao
     // controlada pelo usuario, aplicada ao OBJETO e nao a camera).
     if (key == GLFW_KEY_Q)

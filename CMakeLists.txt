@@ -10,6 +10,7 @@ set(SOURCES
   src/scene.cpp
   src/collisions.cpp
   src/grab.cpp
+  src/shadow.cpp
   src/camera.cpp
   src/player.cpp
   src/bezier.cpp
