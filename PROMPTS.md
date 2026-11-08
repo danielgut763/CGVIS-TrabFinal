@@ -282,3 +282,24 @@ precisão porque o mapa guarda distância em textura float e o z-buffer só
 ordena os objetos entre si.
 
 **O que foi aproveitado:** <preencher após revisão>
+
+
+### 2026-11-08 — M5: assets (peão por revolução, dado, cubo mágico, texturas), instâncias e Gouraud vs Blinn-Phong
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `data/pawn.obj`, `data/die.obj`,
+`data/rubik.obj`, `data/die_diff.jpg`, `data/rubik_diff.jpg`,
+`data/pawn_wood_diff.jpg`, `data/FONTES.txt`, `src/scene.h`, `src/scene.cpp`,
+`src/shader_vertex.glsl`, `src/shader_fragment.glsl`, `src/main.cpp`
+
+**Prompt:**
+
+```
+execute the plan phase M5
+```
+
+**Ferramenta:** Gemini (Google Antigravity)
+
+**O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
+foi corrigido à mão e por quê>

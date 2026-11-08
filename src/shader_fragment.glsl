@@ -5,6 +5,15 @@ in vec4 position_model;
 in vec4 normal;
 in vec2 texcoords;
 
+// Termos interpolados a partir dos vertices quando shading_mode == SHADING_GOURAUD.
+in vec3  gouraud_ambient;
+in vec3  gouraud_diff1;
+in vec3  gouraud_diff2;
+in vec3  gouraud_spec1;
+in vec3  gouraud_spec2;
+in float gouraud_ndotl1;
+in float gouraud_ndotl2;
+
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
@@ -24,6 +33,10 @@ uniform vec4 bbox_max;
 #define PATTERN_FLOOR   2
 #define PATTERN_CEILING 3
 
+// --- Modelo de interpolacao de iluminacao (enum ShadingMode de scene.h) ---
+#define SHADING_PHONG   0
+#define SHADING_GOURAUD 1
+
 uniform int   uv_mode;
 uniform float uv_scale;   // metros de mundo por repeticao (so UV_WORLD)
 uniform int   tex_id;
@@ -31,6 +44,7 @@ uniform float ks;
 uniform float shininess;
 uniform int   pattern;
 uniform float emissive;   // > 0: objeto brilha com cor propria (luminaria)
+uniform int   shading_mode;
 
 // As duas luminarias da fase, ambas tratadas como fontes PONTUAIS: a faixa
 // curta no centro do teto e o pendente em cone na quina. Cada uma tem o seu
@@ -43,14 +57,6 @@ uniform vec3 light2_color;
 
 // O pendente e um SPOTLIGHT, nao uma fonte pontual: a cupula em cone so
 // deixa a luz sair para baixo, dentro de uma abertura.
-//
-// Conforme a Aula 17-18 (Modelos de Iluminacao), um spotlight tem posicao,
-// direcao e abertura, e um ponto p NAO e iluminado quando
-//
-//     dot( (p - l)/|p - l| , v ) < cos(alpha)
-//
-// onde l e a posicao da luz, v a direcao para onde ela aponta e alpha a
-// metade da abertura.
 uniform vec4  light2_dir;        // direcao do eixo do cone, normalizada
 uniform float light2_cos_outer;  // cosseno da abertura
 uniform float light2_cos_inner;  // cosseno de onde comeca a suavizar a borda
@@ -65,6 +71,8 @@ uniform vec4 camera_position;
 uniform sampler2D TextureImage0;
 uniform sampler2D TextureImage1;
 uniform sampler2D TextureImage2;
+uniform sampler2D TextureImage3;
+uniform sampler2D TextureImage4;
 
 // --- Shadow mapping onidirecional ---
 //
@@ -85,7 +93,9 @@ vec3 SampleTexture(vec2 uv)
 {
     if (tex_id == 0) return texture(TextureImage0, uv).rgb;
     if (tex_id == 1) return texture(TextureImage1, uv).rgb;
-    return texture(TextureImage2, uv).rgb;
+    if (tex_id == 2) return texture(TextureImage2, uv).rgb;
+    if (tex_id == 3) return texture(TextureImage3, uv).rgb;
+    return texture(TextureImage4, uv).rgb;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,9 +169,6 @@ vec3 FloorPattern(vec2 uv)
 // Teto: claro, dividido em paineis maiores.
 vec3 CeilingPattern(vec2 uv)
 {
-    // Mais claro que as paredes: no mundo real o teto em volta da luminaria
-    // recebe bastante luz refletida, e com a normal apontando para baixo ele
-    // nao recebe quase nada do termo difuso.
     const vec3 WHITE = vec3(0.960, 0.955, 0.930);
     const vec3 LINE  = vec3(0.660, 0.660, 0.645);
 
@@ -176,15 +183,6 @@ vec3 CeilingPattern(vec2 uv)
 // ---------------------------------------------------------------------------
 // Fator de sombra em [0, 1] para uma luz pontual: 0 totalmente iluminado,
 // 1 totalmente na sombra.
-//
-// Medimos a distancia do fragmento ate a luz e comparamos com a distancia
-// gravada no cube map naquela mesma direcao. Se a do fragmento for maior,
-// existe alguma superficie entre ele e a luz.
-//
-// Como a consulta e feita por DIRECAO, a sombra sai radialmente da fonte: um
-// objeto deslocado em relacao a lampada projeta para o lado oposto a ela. E
-// exatamente isso que uma direcao de luz fixa nao consegue reproduzir, e que
-// fazia a sombra cair sempre reto para baixo.
 // ---------------------------------------------------------------------------
 float PointShadowFactor(samplerCube cube, vec3 light_pos,
                         vec4 p_world, vec4 n_world, float n_dot_l)
@@ -196,11 +194,7 @@ float PointShadowFactor(samplerCube cube, vec3 light_pos,
         return 0.0;
 
     // NORMAL OFFSET BIAS: afastamos o ponto de amostragem ao longo da normal
-    // antes de consultar o mapa. Sem isto, faces quase de perfil para a luz
-    // fazem sombra em si mesmas e aparecem listras ("shadow acne").
-    // O teto e um limite: sem ele, numa superficie muito rasante o
-    // deslocamento cresceria tanto que a sombra descolaria visivelmente do
-    // objeto ("peter panning").
+    // antes de consultar o mapa.
     float offset = min(0.012 + 0.045 * (1.0 - n_dot_l), 0.035);
     vec3  sp     = p_world.xyz + n_world.xyz * offset;
 
@@ -210,23 +204,14 @@ float PointShadowFactor(samplerCube cube, vec3 light_pos,
     if (dist >= shadow_far)
         return 0.0;
 
-    // Bias em METROS, porque o mapa guarda distancia e nao profundidade de
-    // z-buffer. Cresce quando a luz fica rasante, que e quando um texel cobre
-    // uma faixa maior de distancias.
     float bias = min(0.020 + 0.120 * (1.0 - n_dot_l), 0.060);
 
-    // PCF: nove amostras em volta da direcao, com raio proporcional a
-    // distancia, ja que um texel do cube map abre em angulo.
     const vec3 K[8] = vec3[8](
         vec3( 1.0,  1.0,  1.0), vec3( 1.0, -1.0,  1.0),
         vec3(-1.0, -1.0,  1.0), vec3(-1.0,  1.0,  1.0),
         vec3( 1.0,  1.0, -1.0), vec3( 1.0, -1.0, -1.0),
         vec3(-1.0, -1.0, -1.0), vec3(-1.0,  1.0, -1.0));
 
-    // O raio do PCF cresce com a distancia porque um texel do cube map abre
-    // em angulo, mas precisa de teto: longe da luz ele ficaria tao grande que
-    // a sombra viraria um borrao, e a suavidade da borda passaria a depender
-    // de onde a sombra CAI em vez de quem a projeta.
     float radius = min(dist * 0.006, 0.05);
     float sum    = (dist - bias > texture(cube, dir).r * shadow_far) ? 1.0 : 0.0;
 
@@ -308,58 +293,67 @@ void main()
         Kd = SampleTexture(uv);
 
     // -----------------------------------------------------------------------
-    // Iluminacao de Blinn-Phong por fragmento, com uma unica luz direcional.
-    //
-    // Direcional, e nao pontual, por dois motivos: a fonte e um painel longo
-    // embutido no teto, que a distancia da sala se comporta como luz quase
-    // paralela; e e o que permite ao mapa de sombra usar projecao ortografica
-    // ajustada a fase, sem a borda de cone que cortava as paredes.
+    // Iluminacao:
+    //   - SHADING_GOURAUD (1): usa os termos difuso, especular e ambiente ja
+    //     calculados por vertice em shader_vertex.glsl e interpolados pelo
+    //     rasterizador, modulados por Kd e pelas sombras das duas luzes.
+    //   - SHADING_PHONG   (0): avalia Blinn-Phong por fragmento usando a
+    //     normal interpolada n e o meio-vetor h = normalize(l + v).
     // -----------------------------------------------------------------------
-    vec4 v = normalize(camera_position - p);
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
 
-    // ----- luz 1: faixa curta no centro do teto -----
-    vec3  d1v    = light1_pos.xyz - p.xyz;
-    float d1     = max(length(d1v), 1e-6);
-    vec4  l1     = vec4(d1v / d1, 0.0);
-    vec4  h1     = normalize(l1 + v);
-    float lamb1  = max(0.0, dot(n, l1));
-    float blinn1 = pow(max(0.0, dot(n, h1)), shininess);
-    float att1   = 1.0 / (1.0 + 0.10*d1 + 0.025*d1*d1);
-    float shad1  = PointShadowFactor(ShadowCube1, light1_pos.xyz, p, n, lamb1);
+    if (shading_mode == SHADING_GOURAUD)
+    {
+        float shad1 = PointShadowFactor(ShadowCube1, light1_pos.xyz, p, n, gouraud_ndotl1);
+        float shad2 = PointShadowFactor(ShadowCube2, light2_pos.xyz, p, n, gouraud_ndotl2);
 
-    // ----- luz 2: pendente em cone na quina -----
-    vec3  d2v    = light2_pos.xyz - p.xyz;
-    float d2     = max(length(d2v), 1e-6);
-    vec4  l2     = vec4(d2v / d2, 0.0);
-    vec4  h2     = normalize(l2 + v);
-    float lamb2  = max(0.0, dot(n, l2));
-    float blinn2 = pow(max(0.0, dot(n, h2)), shininess);
-    float att2   = 1.0 / (1.0 + 0.25*d2 + 0.08*d2*d2);
+        ambient  = Kd * gouraud_ambient;
+        diffuse  = Kd * gouraud_diff1 * (1.0 - shad1)
+                 + Kd * gouraud_diff2 * (1.0 - shad2);
+        specular = gouraud_spec1 * (1.0 - shad1)
+                 + gouraud_spec2 * (1.0 - shad2);
+    }
+    else
+    {
+        vec4 v = normalize(camera_position - p);
 
-    // Fator do cone do spotlight. O cosseno do angulo entre o eixo da luz e a
-    // direcao luz -> fragmento decide se o ponto esta dentro da abertura.
-    // Usamos smoothstep entre dois cossenos em vez do corte seco da formula,
-    // para a borda do circulo de luz nao ficar serrilhada.
-    float spot_cos = dot(-l2.xyz, normalize(light2_dir.xyz));
-    float spot     = smoothstep(light2_cos_outer, light2_cos_inner, spot_cos);
-    att2 *= spot;
+        // ----- luz 1: faixa curta no centro do teto -----
+        vec3  d1v    = light1_pos.xyz - p.xyz;
+        float d1     = max(length(d1v), 1e-6);
+        vec4  l1     = vec4(d1v / d1, 0.0);
+        vec4  h1     = normalize(l1 + v);
+        float lamb1  = max(0.0, dot(n, l1));
+        float blinn1 = pow(max(0.0, dot(n, h1)), shininess);
+        float att1   = 1.0 / (1.0 + 0.10*d1 + 0.025*d1*d1);
+        float shad1  = PointShadowFactor(ShadowCube1, light1_pos.xyz, p, n, lamb1);
 
-    float shad2  = PointShadowFactor(ShadowCube2, light2_pos.xyz, p, n, lamb2);
+        // ----- luz 2: pendente em cone na quina -----
+        vec3  d2v    = light2_pos.xyz - p.xyz;
+        float d2     = max(length(d2v), 1e-6);
+        vec4  l2     = vec4(d2v / d2, 0.0);
+        vec4  h2     = normalize(l2 + v);
+        float lamb2  = max(0.0, dot(n, l2));
+        float blinn2 = pow(max(0.0, dot(n, h2)), shininess);
+        float att2   = 1.0 / (1.0 + 0.25*d2 + 0.08*d2*d2);
 
-    // Ambiente hemisferico: a parcela que chega de cima e maior que a de
-    // baixo. Com uma luz quase vertical, as paredes recebem pouca luz direta;
-    // sem este gradiente elas ficariam chapadas e sem leitura de volume.
-    float up_amount = 0.5 + 0.5 * n.y;
-    vec3  ambient   = Kd * mix(ambient_ground, ambient_sky, up_amount);
+        float spot_cos = dot(-l2.xyz, normalize(light2_dir.xyz));
+        float spot     = smoothstep(light2_cos_outer, light2_cos_inner, spot_cos);
+        att2 *= spot;
 
-    // Cada luz contribui com difuso e especular, atenuados pela distancia e
-    // cortados pela SUA PROPRIA sombra.
-    vec3 diffuse  = Kd * lamb1 * att1 * light1_color * (1.0 - shad1)
-                  + Kd * lamb2 * att2 * light2_color * (1.0 - shad2);
+        float shad2  = PointShadowFactor(ShadowCube2, light2_pos.xyz, p, n, lamb2);
 
-    vec3 specular = vec3(0.0);
-    if (lamb1 > 0.0) specular += vec3(ks) * blinn1 * att1 * light1_color * (1.0 - shad1);
-    if (lamb2 > 0.0) specular += vec3(ks) * blinn2 * att2 * light2_color * (1.0 - shad2);
+        float up_amount = 0.5 + 0.5 * n.y;
+        ambient  = Kd * mix(ambient_ground, ambient_sky, up_amount);
+
+        diffuse  = Kd * lamb1 * att1 * light1_color * (1.0 - shad1)
+                 + Kd * lamb2 * att2 * light2_color * (1.0 - shad2);
+
+        specular = vec3(0.0);
+        if (lamb1 > 0.0) specular += vec3(ks) * blinn1 * att1 * light1_color * (1.0 - shad1);
+        if (lamb2 > 0.0) specular += vec3(ks) * blinn2 * att2 * light2_color * (1.0 - shad2);
+    }
 
     color.rgb = ambient + diffuse + specular;
     color.a   = 1.0;

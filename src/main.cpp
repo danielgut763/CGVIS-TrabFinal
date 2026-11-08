@@ -251,6 +251,7 @@ GLint g_shininess_uniform;
 // Uniforms de iluminacao
 GLint g_pattern_uniform;
 GLint g_emissive_uniform;
+GLint g_shading_mode_uniform;
 
 GLint g_light1_pos_uniform;
 GLint g_light1_color_uniform;
@@ -367,9 +368,12 @@ int main(int argc, char* argv[])
     //
     LoadShadersFromFiles();
 
-    // Carregamos duas imagens para serem utilizadas como textura
-    LoadTextureImage("../../data/red_brick_diff_1k.jpg");      // TextureImage0
+    // Carregamos cinco imagens para serem utilizadas como textura (M5: >= 3 imagens)
+    LoadTextureImage("../../data/red_brick_diff_1k.jpg");        // TextureImage0
     LoadTextureImage("../../data/rocky_terrain_02_diff_1k.jpg"); // TextureImage1
+    LoadTextureImage("../../data/die_diff.jpg");                 // TextureImage2 (atlas 6 faces do dado)
+    LoadTextureImage("../../data/rubik_diff.jpg");               // TextureImage3 (atlas 6 faces do cubo magico)
+    LoadTextureImage("../../data/pawn_wood_diff.jpg");           // TextureImage4 (madeira torneada do peao)
 
     // Construímos a representação de objetos geométricos através de malhas de triângulos
     ObjModel spheremodel("../../data/sphere.obj");
@@ -394,6 +398,19 @@ int main(int argc, char* argv[])
     ObjModel conemodel("../../data/cone.obj");
     ComputeNormals(&conemodel);
     BuildTrianglesAndAddToVirtualScene(&conemodel);
+
+    // Malhas do marco M5 (Assets e luz): peao por revolucao, dado chanfrado e cubo magico.
+    ObjModel pawnmodel("../../data/pawn.obj");
+    ComputeNormals(&pawnmodel);
+    BuildTrianglesAndAddToVirtualScene(&pawnmodel);
+
+    ObjModel diemodel("../../data/die.obj");
+    ComputeNormals(&diemodel);
+    BuildTrianglesAndAddToVirtualScene(&diemodel);
+
+    ObjModel rubikmodel("../../data/rubik.obj");
+    ComputeNormals(&rubikmodel);
+    BuildTrianglesAndAddToVirtualScene(&rubikmodel);
 
     // Monta a lista de instancias da cena (ver scene.cpp).
     BuildScene(g_Instances);
@@ -911,8 +928,9 @@ void DrawInstance(const Instance& inst)
     glUniform1i(g_tex_id_uniform,    inst.mat.texture_id);
     glUniform1f(g_ks_uniform,        inst.mat.ks);
     glUniform1f(g_shininess_uniform, inst.mat.shininess);
-    glUniform1i(g_pattern_uniform,   inst.mat.pattern);
-    glUniform1f(g_emissive_uniform,  inst.mat.emissive);
+    glUniform1i(g_pattern_uniform,      inst.mat.pattern);
+    glUniform1f(g_emissive_uniform,     inst.mat.emissive);
+    glUniform1i(g_shading_mode_uniform, inst.mat.shading);
 
     DrawVirtualObject(inst.mesh.c_str());
 }
@@ -1033,8 +1051,9 @@ void LoadShadersFromFiles()
     g_ks_uniform         = glGetUniformLocation(g_GpuProgramID, "ks");
     g_shininess_uniform  = glGetUniformLocation(g_GpuProgramID, "shininess");
 
-    g_pattern_uniform    = glGetUniformLocation(g_GpuProgramID, "pattern");
-    g_emissive_uniform   = glGetUniformLocation(g_GpuProgramID, "emissive");
+    g_pattern_uniform      = glGetUniformLocation(g_GpuProgramID, "pattern");
+    g_emissive_uniform     = glGetUniformLocation(g_GpuProgramID, "emissive");
+    g_shading_mode_uniform = glGetUniformLocation(g_GpuProgramID, "shading_mode");
 
     g_light1_pos_uniform       = glGetUniformLocation(g_GpuProgramID, "light1_pos");
     g_light1_color_uniform     = glGetUniformLocation(g_GpuProgramID, "light1_color");
@@ -1056,6 +1075,8 @@ void LoadShadersFromFiles()
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage0"), 0);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage1"), 1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage2"), 2);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage3"), 3);
+    glUniform1i(glGetUniformLocation(g_GpuProgramID, "TextureImage4"), 4);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "ShadowCube1"),
                 ShadowConfig::TEXTURE_UNIT_1);
     glUniform1i(glGetUniformLocation(g_GpuProgramID, "ShadowCube2"),
@@ -1843,14 +1864,17 @@ void TextRendering_ShowEulerAngles(GLFWwindow* window)
     else
     {
         const char* target_name = "cena";
-        if (g_Camera.lookat_instance == g_BezierInstance && g_BezierInstance >= 0)
-            target_name = "esfera (Bezier)";
-        else if (g_Camera.lookat_instance >= 0 && g_Camera.lookat_instance < (int)g_Instances.size())
-            target_name = g_Instances[g_Camera.lookat_instance].mesh.c_str();
+        const char* shading_str = "Phong";
+        if (g_Camera.lookat_instance >= 0 && g_Camera.lookat_instance < (int)g_Instances.size())
+        {
+            const Instance& ti = g_Instances[g_Camera.lookat_instance];
+            target_name = (g_Camera.lookat_instance == g_BezierInstance) ? "esfera (Bezier)" : ti.mesh.c_str();
+            shading_str = (ti.mat.shading == SHADING_GOURAUD) ? "Gouraud" : "Blinn-Phong";
+        }
 
         snprintf(buffer, sizeof(buffer),
-                 "[Look-At: %s] Dist: %.2f | Theta: %.2f Phi: %.2f | [C] 1a Pessoa [V] Trocar alvo",
-                 target_name, g_Camera.lookat_distance,
+                 "[Look-At: %s | %s] Dist: %.2f | Theta: %.2f Phi: %.2f | [C] 1aP [V] Alvo",
+                 target_name, shading_str, g_Camera.lookat_distance,
                  g_Camera.lookat_theta, g_Camera.lookat_phi);
     }
 

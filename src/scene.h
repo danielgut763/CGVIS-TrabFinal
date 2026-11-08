@@ -39,6 +39,14 @@ enum PatternMode
     PATTERN_CEILING = 3  // teto claro dividido em paineis
 };
 
+// Modelo de interpolacao de iluminacao (M5 - Assets e luz).
+// Precisa bater com as constantes de shader_vertex.glsl e shader_fragment.glsl.
+enum ShadingMode
+{
+    SHADING_PHONG   = 0, // Blinn-Phong avaliado por fragmento (interpolacao de Phong)
+    SHADING_GOURAUD = 1  // Blinn-Phong avaliado por vertice (interpolacao de Gouraud)
+};
+
 struct Material
 {
     int   texture_id; // qual TextureImageN usar (so com PATTERN_TEXTURE)
@@ -49,11 +57,13 @@ struct Material
     int   pattern;    // PatternMode
     float emissive;   // > 0 faz o objeto brilhar com cor propria, ignorando a
                       // iluminacao e a sombra. Usado na luminaria do teto.
+    int   shading;    // ShadingMode (SHADING_PHONG ou SHADING_GOURAUD)
 };
 
 Material MakeMaterial(int texture_id, int uv_mode, float uv_scale,
                       float ks = 0.1f, float shininess = 24.0f,
-                      int pattern = PATTERN_TEXTURE, float emissive = 0.0f);
+                      int pattern = PATTERN_TEXTURE, float emissive = 0.0f,
+                      int shading = SHADING_PHONG);
 
 struct Instance
 {
@@ -131,7 +141,7 @@ namespace Room
 void SceneWorldBounds(glm::vec3* out_min, glm::vec3* out_max);
 
 // Preenche a lista com piso, teto, as quatro paredes (a de +X dividida em
-// tres pedacos para deixar o vao da saida) e alguns objetos de teste.
+// tres pedacos para deixar o vao da saida) e os objetos da fase.
 void BuildScene(std::vector<Instance>& out);
 
 #endif // SCENE_H

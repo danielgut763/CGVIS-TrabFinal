@@ -1,2 +1,17 @@
-https://polyhaven.com/a/rocky_terrain_02
-https://polyhaven.com/a/red_brick
+Texturas CC0 (Poly Haven - licenca CC0 1.0 Universal):
+- data/rocky_terrain_02_diff_1k.jpg: https://polyhaven.com/a/rocky_terrain_02 (CC0)
+- data/red_brick_diff_1k.jpg: https://polyhaven.com/a/red_brick (CC0)
+
+Modelos do template / repositorios publicos para uso academico:
+- data/bunny.obj: Stanford Bunny - The Stanford 3D Scanning Repository (http://graphics.stanford.edu/data/3Dscanrep/)
+- data/sphere.obj, data/plane.obj: fornecidos no template da disciplina INF01047 (UFRGS)
+
+Modelos e texturas autorais gerados para o projeto (dominio publico / autoria propria da dupla):
+- data/cube.obj: cubo unitario centrado na origem
+- data/cone.obj: cupula pendente gerada por superficie de revolucao (32 segmentos)
+- data/pawn.obj: peao de xadrez (Staunton) gerado por superficie de revolucao (48 segmentos)
+- data/die.obj: dado de 6 faces com bordas e cantos chanfrados e mapeamento UV em atlas 3x2
+- data/rubik.obj: cubo magico 3x3x3 modelado com sulcos entre pecas e mapeamento UV em atlas 3x2
+- data/die_diff.jpg: atlas de textura das 6 faces do dado (faces opostas somando 7)
+- data/rubik_diff.jpg: atlas de textura das 6 faces do cubo magico 3x3x3
+- data/pawn_wood_diff.jpg: textura de madeira torneada sem costura para o peao
