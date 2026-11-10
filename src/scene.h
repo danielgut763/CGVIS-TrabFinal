@@ -36,7 +36,11 @@ enum PatternMode
     PATTERN_TEXTURE = 0, // cor lida de uma imagem (TextureImageN)
     PATTERN_WALL    = 1, // paineis creme com juntas verticais e rodape verde
     PATTERN_FLOOR   = 2, // piso verde com grade
-    PATTERN_CEILING = 3  // teto claro dividido em paineis
+    PATTERN_CEILING = 3, // teto claro dividido em paineis
+    PATTERN_DOOR    = 4, // porta metalica da saida (M6)
+    PATTERN_BUTTON_IDLE    = 5, // botao solto: vermelho (M6)
+    PATTERN_BUTTON_LIGHT   = 6, // apertado por algo leve demais: ambar
+    PATTERN_BUTTON_ACTIVE  = 7  // apertado por objeto grande: verde, porta abre
 };
 
 // Modelo de interpolacao de iluminacao (M5 - Assets e luz).
@@ -89,6 +93,10 @@ struct Instance
     // bloqueia a luz. Na pratica, sao os objetos da fase que projetam, que e
     // exatamente o que interessa para o jogador perceber o tamanho deles.
     bool casts_shadow;
+
+    // Velocidade vertical em m/s dos objetos pegaveis quando estao soltos e
+    // caindo (M6, ver physics.h). Zero quando apoiados ou na mao.
+    float vel_y = 0.0f;
 };
 
 // Model matrix da instancia: T * Ry * S, aplicada da direita para a esquerda.
@@ -100,6 +108,10 @@ extern std::vector<Instance> g_Instances;
 // Indice em g_Instances do objeto decorativo flutuante que percorre a curva
 // de Bezier cubica (definido em BuildScene).
 extern int g_BezierInstance;
+
+// Indices em g_Instances das pecas do puzzle (M6), definidos em BuildScene.
+extern int g_ButtonInstance;   // botao no piso
+extern int g_DoorInstance;     // porta que fecha a saida elevada
 
 // Extremos do segmento que representa a luminaria em faixa, definidos em
 // BuildScene.
@@ -133,6 +145,39 @@ namespace Room
     // entao so da para alcancar subindo em algum objeto aumentado.
     const float EXIT_Y0    = 2.2f; // base do vao
     const float EXIT_WIDTH = 1.5f; // largura do vao, centrado em z = 0
+}
+
+// ---------------------------------------------------------------------------
+// Pecas do puzzle da fase (M6), em metros.
+//
+// A ideia, como descrita nas limitacoes do SPEC.md: um objeto grande sobre o
+// botao abre a porta da saida elevada, e esse mesmo objeto (com mais um menor
+// servindo de degrau) e a escada para chegar ate ela.
+// ---------------------------------------------------------------------------
+namespace Puzzle
+{
+    // Botao no piso, a frente da saida. Nao e solido: e uma placa fina que
+    // afunda quando algo esta em cima, sem virar um degrau que travaria o
+    // jogador ao caminhar.
+    const float BUTTON_X      = 4.5f;
+    const float BUTTON_Z      = 0.0f;
+    const float BUTTON_SIZE   = 1.0f;   // lado da placa
+    const float BUTTON_UP_H   = 0.05f;  // altura solto
+    const float BUTTON_DOWN_H = 0.008f; // altura apertado
+
+    // Altura minima do objeto sobre o botao para abrir a porta. E o "peso
+    // suficiente" do jogo de referencia: so um objeto aumentado pela
+    // mecanica passa disso.
+    const float MIN_ACTIVATE_HEIGHT = 1.0f;
+
+    // Porta: placa que desliza para BAIXO, para dentro da parede abaixo do
+    // vao. Fica no meio da espessura da parede, sem faces coplanares.
+    const float DOOR_THICKNESS = 0.10f;
+    const float DOOR_TRAVEL    = 1.99f; // para 1 cm abaixo do peitoril
+    const float DOOR_SPEED     = 0.9f;  // m/s
+
+    // Corredor do lado de fora da saida; chegar ao fundo dele vence a fase.
+    const float CORRIDOR_LENGTH = 1.2f;
 }
 
 // Caixa que envolve toda a geometria da fase, incluindo o patamar externo da

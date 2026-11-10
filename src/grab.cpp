@@ -391,6 +391,7 @@ bool GrabTryRelease(GrabState& g, Camera& cam,
     }
 
     inst.solid   = g.was_solid;
+    inst.vel_y   = 0.0f;   // a partir daqui a gravidade assume (physics.cpp)
     cam.lock_fov = false;
 
     g.instance = -1;

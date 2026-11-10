@@ -17,7 +17,11 @@ namespace PlayerConfig
     const float EYE_HEIGHT     = 1.45f; // altura dos olhos a partir dos pes
     const float MOVE_SPEED     = 3.2f;  // velocidade horizontal em m/s
     const float GRAVITY        = 12.0f; // aceleracao da gravidade em m/s^2
-    const float JUMP_SPEED     = 4.2f;  // velocidade vertical inicial do pulo (m/s)
+    // Pulo de ~0,96 m (v^2 / 2g). Era 4.2 (~0,73 m); subiu no M6 para que a
+    // saida a 2,2 m seja alcancavel com dois objetos empilhados (um degrau de
+    // ate ~0,9 m e um bloco de ~1,5 m sobre o botao), sem exigir precisao de
+    // milimetros na escala de cada um.
+    const float JUMP_SPEED     = 4.8f;  // velocidade vertical inicial do pulo (m/s)
     const float MAX_FALL_SPEED = 20.0f; // velocidade terminal de queda (m/s)
 }
 

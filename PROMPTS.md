@@ -303,3 +303,52 @@ execute the plan phase M5
 
 **O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
 foi corrigido à mão e por quê>
+
+
+### 2026-11-09 — M6: a fase (botão, porta, saída) e gravidade nos objetos soltos
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/physics.h`, `src/physics.cpp`
+(novos), `src/level.h`, `src/level.cpp` (novos), `src/collisions.h`,
+`src/collisions.cpp`, `src/scene.h`, `src/scene.cpp`, `src/grab.h`,
+`src/grab.cpp`, `src/player.h`, `src/main.cpp`, `src/shader_fragment.glsl`,
+`CMakeLists.txt`
+
+**Prompt:**
+
+```
+fiz o pull do m5
+analisa e vamos para o m6 - adiciona no m6 a gravidade. Quando soltar o click, o objeto cai
+```
+
+**Ferramenta:** Claude (Anthropic)
+
+**Resumo do que foi gerado:**
+
+- Gravidade nos objetos pegáveis (`physics.cpp`): Euler semi-implícito, igual
+  ao jogador. O apoio é procurado por `FindSupportHeight` em `collisions.cpp`
+  (piso, topo de outro objeto, plataforma, cabeça do jogador), com tolerância
+  de 2 cm para que um objeto pousado com folga de milímetros não atravesse o
+  piso.
+- Controle de segurar para carregar (`GrabConfig::HOLD_TO_CARRY`): apertar o
+  botão esquerdo pega, soltar larga e o objeto cai. Se não couber onde está,
+  a largada fica pendente e é tentada a cada quadro.
+- Botão no piso (não sólido, afunda quando algo está em cima), com três
+  estados: vermelho, âmbar (algo leve demais) e verde (objeto com altura
+  >= 1 m). A porta desce para dentro da parede enquanto o botão está ativo e
+  só volta a subir se não for prender o jogador ou um objeto.
+- Corredor do lado de fora da saída, com painel luminoso no fundo; chegar
+  nele conclui a fase. Tecla N reinicia.
+- `JUMP_SPEED` de 4.2 para 4.8 m/s (pulo de ~0,73 m para ~0,96 m), para a
+  saída a 2,2 m ser alcançável com dois objetos empilhados.
+- Texturas procedurais da porta e do botão em coordenadas do modelo, porque
+  a porta se move.
+
+**Validação:** teste sem janela (lógica pura, com as mesmas funções do jogo):
+dado solto a 2 m pousa em 0,550 s (teórico 0,552 s) exatamente no piso; dado
+pequeno no botão só deixa âmbar; dado de 1,5 m abre a porta; jogador sobe
+degrau → bloco → saída e vence; objeto que cai para fora volta ao lugar.
+Shaders compilados e linkados em WebGL2.
+
+**O que foi aproveitado:** <preencher após revisão>

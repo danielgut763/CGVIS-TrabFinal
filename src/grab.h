@@ -35,6 +35,11 @@ namespace GrabConfig
     const float MIN_REACH     = 0.12f;
     const float PLACE_MARGIN  = 0.004f; // folga deixada entre o objeto e a cena
     const int   REFINE_STEPS  = 14;     // iteracoes da busca binaria de pouso
+
+    // Controle de pegar (M6). true: segura o botao esquerdo para carregar e
+    // solta o botao para largar, e o objeto cai com gravidade (physics.h).
+    // false: um clique pega e outro clique solta, como era no M2.
+    const bool  HOLD_TO_CARRY = true;
 }
 
 struct GrabState

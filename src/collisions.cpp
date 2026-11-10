@@ -207,6 +207,52 @@ int FindBoxContainingPoint(const glm::vec3& p,
     return -1;
 }
 
+bool FindSupportHeight(const AABB& box,
+                       const std::vector<AABB>& boxes,
+                       int skip_index,
+                       float tolerance,
+                       float* out_height)
+{
+    // Mesma folga transversal de ResolveSingleAxis: caixas que so encostam
+    // de lado (face com face) nao servem de apoio.
+    const float EPS = 1e-4f;
+
+    bool  found = false;
+    float best  = 0.0f;
+
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        if ((int)i == skip_index)
+            continue;
+
+        const AABB& b = boxes[i];
+
+        if (box.max.x <= b.min.x + EPS || box.min.x >= b.max.x - EPS)
+            continue;
+        if (box.max.z <= b.min.z + EPS || box.min.z >= b.max.z - EPS)
+            continue;
+
+        // O topo da caixa candidata precisa estar abaixo da base do objeto.
+        // A tolerancia aceita uma penetracao pequena (o pouso da mecanica
+        // deixa uma folga de milimetros); sem ela, um objeto que encostasse
+        // 1 mm dentro do piso o atravessaria, porque o piso nao estaria
+        // "abaixo" dele.
+        if (b.max.y > box.min.y + tolerance)
+            continue;
+
+        if (!found || b.max.y > best)
+        {
+            best  = b.max.y;
+            found = true;
+        }
+    }
+
+    if (found && out_height)
+        *out_height = best;
+
+    return found;
+}
+
 // Resolve o deslocamento da caixa "cur" ao longo de um unico eixo (0=X, 1=Y,
 // 2=Z), truncando o passo caso alguma caixa solida da lista fique no caminho.
 static float ResolveSingleAxis(AABB& cur, int axis, float move,

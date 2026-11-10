@@ -32,6 +32,10 @@ uniform vec4 bbox_max;
 #define PATTERN_WALL    1
 #define PATTERN_FLOOR   2
 #define PATTERN_CEILING 3
+#define PATTERN_DOOR    4
+#define PATTERN_BUTTON_IDLE   5
+#define PATTERN_BUTTON_LIGHT  6
+#define PATTERN_BUTTON_ACTIVE 7
 
 // --- Modelo de interpolacao de iluminacao (enum ShadingMode de scene.h) ---
 #define SHADING_PHONG   0
@@ -180,6 +184,57 @@ vec3 CeilingPattern(vec2 uv)
     return mix(WHITE, LINE, line);
 }
 
+// Porta da saida (M6): chapa metalica com nervuras horizontais e faixa de
+// advertencia na base. Usa a coordenada do MODELO, e nao a de mundo, porque a
+// porta se move: em coordenada de mundo o desenho escorregaria sobre ela.
+vec3 DoorPattern(vec4 pm)
+{
+    const vec3 STEEL  = vec3(0.420, 0.455, 0.490);
+    const vec3 GROOVE = vec3(0.200, 0.215, 0.235);
+    const vec3 YELLOW = vec3(0.900, 0.700, 0.120);
+    const vec3 BLACK  = vec3(0.080, 0.080, 0.080);
+
+    float u = pm.z + 0.5;   // 0..1 ao longo da largura
+    float v = pm.y + 0.5;   // 0..1 da base ao topo
+
+    // 10 nervuras ao longo da altura.
+    float d   = GridDistance(v, 0.1);
+    float rib = 1.0 - smoothstep(0.004, 0.010, d);
+    vec3  col = mix(STEEL, GROOVE, rib);
+
+    // Faixa diagonal amarela e preta nos 10% de baixo.
+    if (v < 0.10)
+    {
+        float stripe = step(0.5, fract((u*1.5 + v*1.5) * 6.0));
+        col = mix(YELLOW, BLACK, stripe);
+    }
+
+    return col;
+}
+
+// Botao no piso (M6): disco colorido sobre uma placa cinza. A cor diz o
+// estado: vermelho solto, ambar apertado por algo leve, verde ativo.
+vec3 ButtonPattern(vec4 pm, vec4 n, int state)
+{
+    const vec3 PLATE = vec3(0.300, 0.300, 0.310);
+    const vec3 RIM   = vec3(0.120, 0.120, 0.125);
+
+    vec3 disc = vec3(0.780, 0.120, 0.100);               // vermelho
+    if (state == PATTERN_BUTTON_LIGHT)  disc = vec3(0.900, 0.560, 0.100);
+    if (state == PATTERN_BUTTON_ACTIVE) disc = vec3(0.180, 0.750, 0.260);
+
+    // Laterais da placa.
+    if (abs(n.y) < 0.5)
+        return PLATE * 0.8;
+
+    float r   = length(pm.xz);         // a placa vai de -0.5 a 0.5 no modelo
+    float in_disc = 1.0 - smoothstep(0.375, 0.385, r);
+    float ring    = 1.0 - smoothstep(0.010, 0.018, abs(r - 0.40));
+
+    vec3 col = mix(PLATE, disc, in_disc);
+    return mix(col, RIM, ring);
+}
+
 // ---------------------------------------------------------------------------
 // Fator de sombra em [0, 1] para uma luz pontual: 0 totalmente iluminado,
 // 1 totalmente na sombra.
@@ -289,6 +344,10 @@ void main()
         Kd = FloorPattern(uv);
     else if (pattern == PATTERN_CEILING)
         Kd = CeilingPattern(uv);
+    else if (pattern == PATTERN_DOOR)
+        Kd = DoorPattern(position_model);
+    else if (pattern >= PATTERN_BUTTON_IDLE && pattern <= PATTERN_BUTTON_ACTIVE)
+        Kd = ButtonPattern(position_model, n, pattern);
     else
         Kd = SampleTexture(uv);
 

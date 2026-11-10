@@ -7,6 +7,8 @@ glm::vec3 g_LampP0(0.0f);
 glm::vec3 g_LampP1(0.0f);
 glm::vec3 g_Lamp2Pos(0.0f);
 int       g_BezierInstance = -1;
+int       g_ButtonInstance = -1;
+int       g_DoorInstance   = -1;
 
 Material MakeMaterial(int texture_id, int uv_mode, float uv_scale,
                       float ks, float shininess,
@@ -67,6 +69,8 @@ void BuildScene(std::vector<Instance>& out)
 {
     out.clear();
     g_BezierInstance = -1;
+    g_ButtonInstance = -1;
+    g_DoorInstance   = -1;
 
     const float HX = Room::HALF_X;
     const float HZ = Room::HALF_Z;
@@ -113,6 +117,45 @@ void BuildScene(std::vector<Instance>& out)
                           glm::vec3(T, Room::EXIT_Y0, Room::EXIT_WIDTH), wall_mat, true));
         out.push_back(Box(glm::vec3(HX + T + 0.6f, Room::EXIT_Y0 - T*0.5f, 0.0f),
                           glm::vec3(1.2f, T, Room::EXIT_WIDTH + 0.4f), floor_mat, true));
+        // -------------------------------------------------------------------
+        // Porta da saida (M6). Preenche o vao inteiro, do peitoril (EXIT_Y0)
+        // ao teto, no meio da espessura da parede. Ao abrir, desce para
+        // dentro do pedaco de parede abaixo do vao (ver level.cpp).
+        // -------------------------------------------------------------------
+        {
+            const float door_h = H - Room::EXIT_Y0;
+            Instance door = Box(glm::vec3(HX + T*0.5f, Room::EXIT_Y0 + door_h*0.5f, 0.0f),
+                                glm::vec3(Puzzle::DOOR_THICKNESS, door_h, Room::EXIT_WIDTH),
+                                MakeMaterial(0, UV_OBJ, 1.0f, 0.30f, 40.0f, PATTERN_DOOR),
+                                true);
+            g_DoorInstance = (int)out.size();
+            out.push_back(door);
+        }
+
+        // -------------------------------------------------------------------
+        // Corredor do lado de fora, sobre a plataforma: duas paredes laterais,
+        // teto e, no fundo, um painel luminoso que marca a saida. Chegar nele
+        // conclui a fase.
+        // -------------------------------------------------------------------
+        {
+            const float L     = Puzzle::CORRIDOR_LENGTH;
+            const float y0    = Room::EXIT_Y0;
+            const float ch    = H - y0;               // altura interna
+            const float x_mid = HX + T + L*0.5f;
+
+            out.push_back(Box(glm::vec3(x_mid, y0 + ch*0.5f, -(hw + T*0.5f)),
+                              glm::vec3(L, ch, T), wall_mat, true));
+            out.push_back(Box(glm::vec3(x_mid, y0 + ch*0.5f,  (hw + T*0.5f)),
+                              glm::vec3(L, ch, T), wall_mat, true));
+            out.push_back(Box(glm::vec3(x_mid + T*0.5f, H + T*0.5f, 0.0f),
+                              glm::vec3(L + T, T, Room::EXIT_WIDTH + 2.0f*T), ceiling_mat, true));
+
+            Material exit_mat = MakeMaterial(0, UV_OBJ, 1.0f, 0.0f, 1.0f,
+                                             PATTERN_TEXTURE, 1.6f);
+            out.push_back(Box(glm::vec3(HX + T + L + 0.05f, y0 + ch*0.5f, 0.0f),
+                              glm::vec3(0.10f, ch, Room::EXIT_WIDTH), exit_mat, true));
+        }
+
         out.push_back(Box(glm::vec3(HX + T*0.5f, H*0.5f, -side_cz),
                           glm::vec3(T, H, side_w), wall_mat, true));
         out.push_back(Box(glm::vec3(HX + T*0.5f, H*0.5f,  side_cz),
@@ -304,5 +347,17 @@ void BuildScene(std::vector<Instance>& out)
         sphere.casts_shadow = true;
         g_BezierInstance = (int)out.size();
         out.push_back(sphere);
+    }
+
+    // 7) Botao do puzzle (M6): placa fina no piso, a frente da saida. Nao e
+    //    solida, para nao virar um degrau que trave a caminhada; quem decide
+    //    se ha algo em cima e level.cpp, por teste de sobreposicao de AABBs.
+    {
+        Instance button = Box(glm::vec3(Puzzle::BUTTON_X, Puzzle::BUTTON_UP_H*0.5f, Puzzle::BUTTON_Z),
+                              glm::vec3(Puzzle::BUTTON_SIZE, Puzzle::BUTTON_UP_H, Puzzle::BUTTON_SIZE),
+                              MakeMaterial(0, UV_OBJ, 1.0f, 0.25f, 36.0f, PATTERN_BUTTON_IDLE),
+                              false);
+        g_ButtonInstance = (int)out.size();
+        out.push_back(button);
     }
 }

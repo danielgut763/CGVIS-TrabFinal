@@ -57,6 +57,8 @@
 #include "grab.h"
 #include "shadow.h"
 #include "bezier.h"
+#include "physics.h"
+#include "level.h"
 
 // Estrutura que representa um modelo geométrico carregado a partir de um
 // arquivo ".obj". Veja https://en.wikipedia.org/wiki/Wavefront_.obj_file .
@@ -221,6 +223,15 @@ bool        g_CycleLookAtRequest  = false;
 // que so existe dentro do laco principal, entao o callback apenas registra o
 // pedido e a posicao do cursor em NDC; quem resolve e o laco.
 bool        g_GrabRequest = false;
+
+// Largada pendente (M6). Com GrabConfig::HOLD_TO_CARRY, soltar o botao do
+// mouse pede para largar o objeto. Se ele nao couber onde esta (SEM ESPACO),
+// o pedido fica pendente e e tentado de novo a cada quadro, ate caber.
+bool        g_GrabDropPending = false;
+
+// Estado do puzzle da fase (M6): botao, porta e vitoria. Ver level.h.
+LevelState  g_Level;
+bool        g_RestartRequest = false;   // tecla N
 double      g_GrabNdcX    = 0.0;
 double      g_GrabNdcY    = 0.0;
 PlayerInput g_PlayerInput = { false, false, false, false, false };
@@ -443,6 +454,9 @@ int main(int argc, char* argv[])
     BezierInit(g_Bezier, g_BezierInstance);
     g_Camera.lookat_instance = g_BezierInstance;
 
+    // Guarda a cena inicial para reiniciar a fase (M6).
+    LevelInit(g_Level);
+
     {
         std::vector<AABB> boxes = BuildSolidAABBs();
         printf("Cena: %d instancias, %d AABBs solidas.\n",
@@ -501,6 +515,22 @@ int main(int argc, char* argv[])
         // um quadro muito longo e os objetos atravessariam a geometria.
         if (g_DeltaTime > 0.1f)
             g_DeltaTime = 0.1f;
+
+        // ------------------------------------------------------------------
+        // Reinicio da fase (tecla N, M6): cena, jogador e camera voltam ao
+        // estado inicial.
+        // ------------------------------------------------------------------
+        if (g_RestartRequest)
+        {
+            g_RestartRequest  = false;
+            g_GrabDropPending = false;
+
+            LevelRestart(g_Level);
+            GrabInit(g_Grab);
+            PlayerInit(g_Player, glm::vec3(-4.6f, 0.0f, 0.0f));
+            CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
+            g_Camera.lookat_instance = g_BezierInstance;
+        }
 
         // ------------------------------------------------------------------
         // Animacao por curva de Bezier cubica (M3), baseada em g_DeltaTime.
@@ -575,6 +605,11 @@ int main(int argc, char* argv[])
         {
             UpdatePlayer(g_Player, g_PlayerInput, g_Camera.yaw,
                          solid_boxes, g_DeltaTime);
+
+            // Caiu para fora da sala (pela saida): volta ao ponto inicial.
+            if (g_Player.pos.y < LevelConfig::KILL_Y)
+                PlayerInit(g_Player, glm::vec3(-4.6f, 0.0f, 0.0f));
+
             g_Camera.eye = PlayerEyePosition(g_Player);
         }
         else
@@ -588,17 +623,45 @@ int main(int argc, char* argv[])
 
         // Clique pendente: pega o objeto sob o cursor, ou solta o que esta na
         // mao. Tratado aqui porque depende das AABBs deste quadro.
+        //
+        // Com HOLD_TO_CARRY (M6), apertar pega e soltar o botao larga; sem,
+        // cada clique alterna entre pegar e soltar, como no M2.
         if (g_GrabRequest)
         {
             g_GrabRequest = false;
 
-            if (GrabIsHolding(g_Grab))
-                GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance,
-                               PlayerAABB(g_Player));
-            else
+            if (!GrabIsHolding(g_Grab))
+            {
+                // Um pedido de largar que sobrou de antes nao vale para o
+                // objeto que esta sendo pego agora.
+                g_GrabDropPending = false;
                 GrabTryPick(g_Grab, g_Camera, g_ScreenRatio,
                             (float)g_GrabNdcX, (float)g_GrabNdcY,
                             solid_boxes, box_instance);
+
+                // Clique rapido: o botao ja foi solto antes deste quadro.
+                if (GrabConfig::HOLD_TO_CARRY && !g_LeftMouseButtonPressed)
+                    g_GrabDropPending = true;
+            }
+            else if (!GrabConfig::HOLD_TO_CARRY)
+            {
+                g_GrabDropPending = true;
+            }
+            else
+            {
+                // Largada estava pendente (sem espaco) e o jogador apertou de
+                // novo: ele quer continuar carregando.
+                g_GrabDropPending = false;
+            }
+        }
+
+        if (g_GrabDropPending)
+        {
+            if (!GrabIsHolding(g_Grab))
+                g_GrabDropPending = false;
+            else if (GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance,
+                                    PlayerAABB(g_Player)))
+                g_GrabDropPending = false;
         }
 
         // ------------------------------------------------------------------
@@ -623,6 +686,15 @@ int main(int argc, char* argv[])
             GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance,
                        PlayerAABB(g_Player));
         }
+
+        // ------------------------------------------------------------------
+        // Gravidade dos objetos soltos e logica da fase (M6).
+        //
+        // Depois do pegar/soltar deste quadro: um objeto largado agora ja
+        // comeca a cair, e o botao enxerga as posicoes atualizadas.
+        // ------------------------------------------------------------------
+        UpdateFallingObjects(g_Grab.instance, PlayerAABB(g_Player), g_DeltaTime);
+        LevelUpdate(g_Level, g_Grab.instance, PlayerAABB(g_Player), g_DeltaTime);
 
         glm::vec4 camera_position_c = CameraEyePosition(g_Camera);
         glm::mat4 view              = CameraViewMatrix(g_Camera);
@@ -770,6 +842,28 @@ int main(int argc, char* argv[])
                      g_Grab.cur_distance, g_Grab.cur_factor,
                      g_Grab.blocked ? "  |  SEM ESPACO" : "");
             TextRendering_PrintString(window, buf, -0.98f, 0.90f, 1.0f);
+        }
+
+        // Objetivo da fase (M6).
+        {
+            char goal[160];
+            if (g_Level.won)
+                snprintf(goal, sizeof(goal),
+                         "FASE CONCLUIDA em %.0f s!  [N] jogar de novo",
+                         g_Level.win_time);
+            else if (g_Level.button_active)
+                snprintf(goal, sizeof(goal),
+                         "Porta aberta: suba ate a saida elevada  |  [N] reiniciar");
+            else if (g_Level.button_pressed)
+                snprintf(goal, sizeof(goal),
+                         "O botao precisa de um objeto maior (>= %.1f m de altura)",
+                         Puzzle::MIN_ACTIVATE_HEIGHT);
+            else
+                snprintf(goal, sizeof(goal),
+                         "Objetivo: ponha um objeto grande sobre o botao para abrir a saida");
+
+            float scale = g_Level.won ? 2.0f : 1.0f;
+            TextRendering_PrintString(window, goal, -0.98f, 0.82f, scale);
         }
 
         // Informacoes de estado do jogador e da camera no canto inferior.
@@ -1601,6 +1695,10 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
     {
         g_LeftMouseButtonPressed = false;
+
+        // Segurar para carregar: soltar o botao larga o objeto (M6).
+        if (GrabConfig::HOLD_TO_CARRY)
+            g_GrabDropPending = true;
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)
     {
@@ -1738,6 +1836,12 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mod)
     if (key == GLFW_KEY_V && action == GLFW_PRESS)
     {
         g_CycleLookAtRequest = true;
+    }
+
+    // Tecla N: reinicia a fase (M6).
+    if (key == GLFW_KEY_N && action == GLFW_PRESS)
+    {
+        g_RestartRequest = true;
     }
 
     // Tecla TAB: prende/solta o cursor do mouse na janela.

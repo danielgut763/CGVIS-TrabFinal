@@ -14,6 +14,8 @@ set(SOURCES
   src/camera.cpp
   src/player.cpp
   src/bezier.cpp
+  src/physics.cpp
+  src/level.cpp
   src/correcao.cpp
   src/textrendering.cpp
   src/tiny_obj_loader.cpp

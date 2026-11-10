@@ -84,6 +84,17 @@ int FindBoxContainingPoint(const glm::vec3& p,
 // solido (ignorando skip_index), o movimento naquele eixo e truncado na face
 // de contato e "out_hit_axis[eixo]" recebe true.
 // Devolve o deslocamento efetivamente aplicado.
+// Queda vertical de um objeto solto (M6). Procura, entre as caixas que se
+// sobrepoem a "box" no plano XZ, a superficie de apoio mais alta que esteja
+// abaixo da base da caixa, ou no maximo "tolerance" acima dela (o objeto pode
+// ter sido solto encostando de leve em algo). Devolve false se nao houver
+// nenhuma: o objeto esta sobre o vazio e cai indefinidamente.
+bool FindSupportHeight(const AABB& box,
+                       const std::vector<AABB>& boxes,
+                       int skip_index,
+                       float tolerance,
+                       float* out_height);
+
 glm::vec3 ResolveAABBMovement(const AABB& box,
                               const glm::vec3& delta,
                               const std::vector<AABB>& boxes,
