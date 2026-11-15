@@ -1,5 +1,7 @@
 #include "physics.h"
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "grab.h"   // GetMeshLocalBBox
@@ -32,26 +34,43 @@ void UpdateFallingObjects(int held_instance, const AABB& player_box, float dt)
         if (!GetMeshLocalBBox(inst.mesh, &lmin, &lmax))
             continue;
 
-        boxes.push_back(AABBTransform(lmin, lmax, InstanceModelMatrix(inst)));
+        AABB b = AABBTransform(lmin, lmax, InstanceModelMatrix(inst));
+        if ((int)i == g_DoorInstance)
+        {
+            b.min.x = Room::HALF_X;
+            b.max.x = Room::HALF_X + Room::THICKNESS;
+        }
+        boxes.push_back(b);
         owner.push_back((int)i);
     }
 
+    const int player_k = (int)boxes.size();
     boxes.push_back(player_box);
     owner.push_back(-1);
 
     // -----------------------------------------------------------------------
-    // 2) Queda de cada objeto pegavel.
+    // 2) Queda de cada objeto pegavel, ordenados do mais baixo para o mais
+    //    alto (min.y crescente). Assim, numa pilha de objetos, o de baixo
+    //    cai primeiro e o de cima o acompanha no mesmo quadro sem ficar
+    //    flutuando por um passo.
     // -----------------------------------------------------------------------
+    std::vector<size_t> order;
+    order.reserve(boxes.size());
     for (size_t k = 0; k < boxes.size(); ++k)
     {
         int idx = owner[k];
-        if (idx < 0)
-            continue;
+        if (idx >= 0 && g_Instances[idx].grabbable)
+            order.push_back(k);
+    }
+    std::sort(order.begin(), order.end(),
+              [&boxes](size_t a, size_t b) { return boxes[a].min.y < boxes[b].min.y; });
+
+    for (size_t m = 0; m < order.size(); ++m)
+    {
+        size_t k   = order[m];
+        int    idx = owner[k];
 
         Instance& inst = g_Instances[idx];
-        if (!inst.grabbable)
-            continue;
-
         if (idx == held_instance)
         {
             inst.vel_y = 0.0f;
@@ -74,8 +93,14 @@ void UpdateFallingObjects(int held_instance, const AABB& player_box, float dt)
                               PhysicsConfig::SUPPORT_TOL, &support)
             && box.min.y + dy <= support)
         {
-            dy = support - box.min.y;   // pode ser levemente positivo: desfaz
-            v  = 0.0f;                  // uma penetracao de milimetros
+            float snap_dy = support - box.min.y;
+            // Evita que a cabeca do jogador em movimento empurre para cima um
+            // objeto ja apoiado em outra superficie.
+            if (snap_dy > 0.0f && std::fabs(support - boxes[player_k].max.y) < 1e-4f)
+                snap_dy = 0.0f;
+
+            dy = snap_dy;
+            v  = 0.0f;
         }
 
         inst.pos.y += dy;

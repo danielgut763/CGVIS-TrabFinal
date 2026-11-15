@@ -116,7 +116,7 @@ lateral.
 
 ### 2026-10-30 — M3: curva de Bézier cúbica, câmera look-at e fechamento da parcial
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `4ebec8f`
 
 **Arquivos gerados/alterados por IA:** `src/bezier.h`, `src/bezier.cpp`,
 `src/camera.h`, `src/camera.cpp`, `src/grab.h`, `src/grab.cpp`,
@@ -135,7 +135,7 @@ foi corrigido à mão e por quê>
 
 ### 2026-10-31 — M4: shadow mapping (funcionalidade extra)
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `333bfa0`
 
 **Arquivos gerados/alterados por IA:** `src/shadow.h`, `src/shadow.cpp`,
 `src/shader_shadow_vertex.glsl`, `src/shader_shadow_fragment.glsl`,
@@ -169,7 +169,7 @@ uniforms ativos foi cruzada com os nomes buscados em main.cpp.
 
 ### 2026-10-31 — Correção do M4 e revisão visual da fase
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `333bfa0`
 
 **Arquivos gerados/alterados por IA:** `src/shadow.h`, `src/shadow.cpp`,
 `src/shader_fragment.glsl`, `src/scene.h`, `src/scene.cpp`, `src/bezier.cpp`,
@@ -286,7 +286,7 @@ ordena os objetos entre si.
 
 ### 2026-11-08 — M5: assets (peão por revolução, dado, cubo mágico, texturas), instâncias e Gouraud vs Blinn-Phong
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `f9e7076`
 
 **Arquivos gerados/alterados por IA:** `data/pawn.obj`, `data/die.obj`,
 `data/rubik.obj`, `data/die_diff.jpg`, `data/rubik_diff.jpg`,
@@ -307,7 +307,7 @@ foi corrigido à mão e por quê>
 
 ### 2026-11-09 — M6: a fase (botão, porta, saída) e gravidade nos objetos soltos
 
-**Commit:** `<preencher com o hash>`
+**Commit:** `f8ef9b8`
 
 **Arquivos gerados/alterados por IA:** `src/physics.h`, `src/physics.cpp`
 (novos), `src/level.h`, `src/level.cpp` (novos), `src/collisions.h`,
@@ -352,3 +352,53 @@ degrau → bloco → saída e vence; objeto que cai para fora volta ao lugar.
 Shaders compilados e linkados em WebGL2.
 
 **O que foi aproveitado:** <preencher após revisão>
+
+
+### 2026-11-15 — M7: acabamento, caça a bugs (colisão, textura, flickering) e metadados
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/scene.h`, `src/grab.cpp`,
+`src/physics.cpp`, `src/level.cpp`, `src/main.cpp`,
+`src/shader_fragment.glsl`, `Makefile.macOS`, `README.md`,
+`metadados-entrega.json`, `PROMPTS.md`
+
+**Prompt:**
+
+```
+execute the m7
+```
+
+**Ferramenta:** Gemini (Google Antigravity)
+
+**Resumo do que foi gerado:**
+
+- Correção do curso da porta da saída (`Puzzle::DOOR_TRAVEL` de `1.99f` para
+  `2.01f` em `src/scene.h`), fazendo com que o topo da porta aberta pare a
+  $2{,}19\text{ m}$ ($1\text{ cm}$ abaixo do peitoril de $2{,}20\text{ m}$, em
+  vez de $1\text{ cm}$ acima), eliminando o degrau de $1\text{ cm}$ que travava
+  a passagem do jogador para o corredor externo e evitando faces coplanares.
+- Ajuste da AABB de colisão da porta (`src/main.cpp`, `src/level.cpp`,
+  `src/physics.cpp`) para cobrir toda a espessura da parede ($[6{,}00, 6{,}20]$)
+  enquanto a malha visual permanece recuada ($0{,}10\text{ m}$), impedindo que o
+  jogador se apoiasse na aba de $5\text{ cm}$ com a porta fechada sem causar
+  *z-fighting*.
+- Refinamento analítico do raio efetivo `r_eff` em `GrabUpdate` (`src/grab.cpp`)
+  considerando a rotação atual `yaw` do objeto e o plano da face atingida
+  (`hit.normal`), eliminando saltos/flickering da busca binária ao deslizar o
+  objeto pelo piso ou paredes em ângulos oblíquos; atualização de `GrabUpdate`
+  antes de `GrabTryRelease` no quadro e manutenção do objeto suspenso ao
+  alternar para a câmera *look-at*.
+- Ordenação de baixo para cima (`min.y` crescente) dos objetos em queda em
+  `UpdateFallingObjects` (`src/physics.cpp`) para que pilhas de objetos caiam
+  juntas no mesmo quadro.
+- Mapeamento tri-planar suave no espaço do modelo para `UV_PLANAR_XY` no coelho
+  (`src/shader_fragment.glsl`) eliminando textura esticada nas laterais,
+  suavização com `smoothstep` das faixas diagonais da porta contra *flickering*,
+  rodapé acompanhando o piso elevado do corredor externo e friso colorido na
+  borda do botão.
+- Preenchimento do `README.md`, `metadados-entrega.json` e atualização de
+  `Makefile.macOS`.
+
+**O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
+foi corrigido à mão e por quê>

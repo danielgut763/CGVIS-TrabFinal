@@ -240,6 +240,8 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     if (t_hit < 0.0f)
         t_hit = 0.0f;
 
+    float yaw = g.yaw0 + g.yaw_offset;
+
     // -----------------------------------------------------------------------
     // 2) Onde o objeto pousa.
     //
@@ -247,20 +249,35 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     // ponto atingido pelo raio. O objeto tem volume, e esse volume cresce
     // junto com a distancia, o que realimenta o problema.
     //
-    // Seja r0 a meia-extensao do objeto ao longo do raio quando ele estava a
-    // d0. Como a escala e proporcional a distancia, a uma distancia d essa
-    // meia-extensao vale r0*(d/d0). Para a face da frente apenas ENCOSTAR na
-    // superficie, e nao atravessa-la:
+    // Seja r_eff a meia-extensao efetiva do objeto ao longo do raio quando ele
+    // esta a d0 com a rotacao atual "yaw". Como a escala e proporcional a
+    // distancia, a uma distancia d essa meia-extensao vale r_eff*(d/d0). Para
+    // a face da frente apenas ENCOSTAR na superficie atingida (normal
+    // hit.normal), e nao atravessa-la nem em angulos rasantes:
     //
-    //     d + r0*(d/d0) <= t_hit
-    //     d * (1 + r0/d0) <= t_hit
-    //     d <= t_hit / (1 + r0/d0)
+    //     d + r_eff*(d/d0) <= t_hit
+    //     d * (1 + r_eff/d0) <= t_hit
+    //     d <= t_hit / (1 + r_eff/d0)
     //
-    // Isto e um sphere cast de uma esfera que cresce proporcionalmente a
-    // distancia, e resolve o caso da parede de frente em forma fechada, sem
-    // nenhuma iteracao.
+    // Calculamos r_eff combinando a meia-extensao na direcao do raio com a
+    // projecao sobre a normal da face atingida dividida por |dir . normal|, o
+    // que mantem o contato exato em forma fechada em qualquer angulo de visada
+    // (evitando saltos ou flickering da busca binaria ao deslizar pelo piso).
     // -----------------------------------------------------------------------
-    float d_wall = t_hit / (1.0f + g.r0 / g.d0);
+    AABB  box0  = ObjectAABBAt(inst, local_min, local_max, yaw, g.s0, glm::vec3(0.0f));
+    float r_eff = AABBHalfExtentAlongDir(box0, dir);
+    if (hit.hit)
+    {
+        float cos_n = std::fabs(Dot3(dir, hit.normal));
+        if (cos_n > 1e-4f)
+        {
+            float r_plane = AABBHalfExtentAlongDir(box0, hit.normal) / cos_n;
+            if (r_plane > r_eff)
+                r_eff = r_plane;
+        }
+    }
+
+    float d_wall = t_hit / (1.0f + r_eff / g.d0);
 
     // Limites de escala, para o objeto nao virar poeira nem engolir a fase
     // (objeto gigante e distante tambem castiga a precisao do z-buffer).
@@ -290,8 +307,6 @@ void GrabUpdate(GrabState& g, const Camera& cam,
         if (d < d_min) d = d_min;
         if (d > d_max) d = d_max;
     }
-
-    float yaw = g.yaw0 + g.yaw_offset;
 
     // -----------------------------------------------------------------------
     // 3) Refinamento lateral e verificacao contra o corpo do jogador.

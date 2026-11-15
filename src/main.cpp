@@ -271,7 +271,6 @@ GLint g_light2_color_uniform;
 GLint g_light2_dir_uniform;
 GLint g_light2_cos_outer_uniform;
 GLint g_light2_cos_inner_uniform;
-GLint g_light_color_uniform;
 GLint g_ambient_sky_uniform;
 GLint g_ambient_ground_uniform;
 GLint g_camera_position_uniform;
@@ -655,21 +654,13 @@ int main(int argc, char* argv[])
             }
         }
 
-        if (g_GrabDropPending)
-        {
-            if (!GrabIsHolding(g_Grab))
-                g_GrabDropPending = false;
-            else if (GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance,
-                                    PlayerAABB(g_Player)))
-                g_GrabDropPending = false;
-        }
-
         // ------------------------------------------------------------------
         // Mecanica de perspectiva forcada (M2).
         //
         // Rotacao do objeto na mao (Q e E) e, em seguida, recalculo da sua
-        // posicao e escala. Ambas multiplicadas por g_DeltaTime, para que a
-        // velocidade nao dependa da maquina.
+        // posicao e escala ANTES de processar eventual largada pendente, para
+        // que o objeto seja testado e solto na posicao ja atualizada deste
+        // quadro. Ambas multiplicadas por g_DeltaTime.
         // ------------------------------------------------------------------
         if (GrabIsHolding(g_Grab))
         {
@@ -685,6 +676,15 @@ int main(int argc, char* argv[])
         {
             GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance,
                        PlayerAABB(g_Player));
+        }
+
+        if (g_GrabDropPending)
+        {
+            if (!GrabIsHolding(g_Grab))
+                g_GrabDropPending = false;
+            else if (GrabTryRelease(g_Grab, g_Camera, solid_boxes, box_instance,
+                                    PlayerAABB(g_Player)))
+                g_GrabDropPending = false;
         }
 
         // ------------------------------------------------------------------
@@ -1054,9 +1054,19 @@ std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box)
         if (it == g_VirtualScene.end())
             continue;
 
-        boxes.push_back(AABBTransform(it->second.bbox_min,
-                                      it->second.bbox_max,
-                                      InstanceModelMatrix(inst)));
+        AABB box = AABBTransform(it->second.bbox_min,
+                                 it->second.bbox_max,
+                                 InstanceModelMatrix(inst));
+        // A porta e desenhada com 0,10 m de espessura para nao brigar no
+        // z-buffer com a parede abaixo do vao, mas na colisao ocupa toda a
+        // espessura da parede para nao criar uma aba de 5 cm onde o jogador
+        // pudesse se apoiar com a porta fechada.
+        if ((int)i == g_DoorInstance)
+        {
+            box.min.x = Room::HALF_X;
+            box.max.x = Room::HALF_X + Room::THICKNESS;
+        }
+        boxes.push_back(box);
 
         // As instancias nao solidas sao puladas, entao o indice da caixa NAO e
         // o indice da instancia. Este vetor paralelo faz a correspondencia,
@@ -1156,7 +1166,6 @@ void LoadShadersFromFiles()
     g_light2_dir_uniform       = glGetUniformLocation(g_GpuProgramID, "light2_dir");
     g_light2_cos_outer_uniform = glGetUniformLocation(g_GpuProgramID, "light2_cos_outer");
     g_light2_cos_inner_uniform = glGetUniformLocation(g_GpuProgramID, "light2_cos_inner");
-    g_light_color_uniform      = glGetUniformLocation(g_GpuProgramID, "light_color");
     g_ambient_sky_uniform     = glGetUniformLocation(g_GpuProgramID, "ambient_sky");
     g_ambient_ground_uniform  = glGetUniformLocation(g_GpuProgramID, "ambient_ground");
     g_camera_position_uniform = glGetUniformLocation(g_GpuProgramID, "camera_position");
@@ -1696,8 +1705,9 @@ void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
     {
         g_LeftMouseButtonPressed = false;
 
-        // Segurar para carregar: soltar o botao larga o objeto (M6).
-        if (GrabConfig::HOLD_TO_CARRY)
+        // Segurar para carregar: soltar o botao em 1a pessoa larga o objeto
+        // (M6). Na camera look-at o objeto permanece suspenso para inspecao.
+        if (GrabConfig::HOLD_TO_CARRY && g_Camera.mode == CAM_FIRST_PERSON)
             g_GrabDropPending = true;
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)

@@ -1,0 +1,20 @@
+{
+  "titulo": "Infraliminal",
+  "integrantes": [
+    {
+      "nome": "Daniel Gutschwager",
+      "cartao": "00315708"
+    },
+    {
+      "nome": "Leonardo Leites",
+      "cartao": "00338804"
+    }
+  ],
+  "video_referencia": {
+    "url": "https://www.youtube.com/watch?v=WrQl0WQRGBo",
+    "timestamp_inicial": "13:30",
+    "timestamp_final": "14:30"
+  },
+  "video_apresentacao": "PREENCHER_COM_LINK_DO_VIDEO_DE_3_A_5_MINUTOS",
+  "funcionalidade_extra": "Shadow mapping onidirecional (Point Shadow Cube Maps com PCF e Normal Offset Bias) e Ray Picking com perspectiva forcada."
+}

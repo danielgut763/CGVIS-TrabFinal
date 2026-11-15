@@ -159,6 +159,9 @@ void LevelUpdate(LevelState& L, int held_instance, const AABB& player_box, float
 
             if (InstanceAABB(probe, &door_box))
             {
+                door_box.min.x = Room::HALF_X;
+                door_box.max.x = Room::HALF_X + Room::THICKNESS;
+
                 if (AABBOverlap(door_box, player_box))
                     blocked = true;
 

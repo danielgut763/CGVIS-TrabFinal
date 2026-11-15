@@ -135,17 +135,21 @@ vec3 WallPattern(vec4 p, vec2 uv)
     float d    = GridDistance(uv.x, PANEL_WIDTH);
     float seam = 1.0 - smoothstep(0.012, 0.030, d);
 
+    // Altura acima do piso local (0 na sala principal; 2,2 m no corredor da
+    // saida elevada) para que o rodape acompanhe tambem o corredor externo.
+    float y_floor = (p.x > 6.19 && p.y >= 2.19) ? (p.y - 2.2) : p.y;
+
     // Gradiente vertical suave, para a parede nao ficar completamente chapada.
-    float grad = clamp(p.y / 3.2, 0.0, 1.0);
+    float grad = clamp(y_floor / 3.2, 0.0, 1.0);
     vec3  col  = mix(CREAM*0.90, CREAM, grad);
 
     col = mix(col, SEAM, seam);
 
     // Rodape e a linha escura que marca o topo dele.
-    float in_skirt = 1.0 - smoothstep(SKIRT_H, SKIRT_H + 0.015, p.y);
+    float in_skirt = 1.0 - smoothstep(SKIRT_H, SKIRT_H + 0.015, y_floor);
     col = mix(col, SKIRT, in_skirt);
 
-    float lip = 1.0 - smoothstep(0.010, 0.026, abs(p.y - SKIRT_H));
+    float lip = 1.0 - smoothstep(0.010, 0.026, abs(y_floor - SKIRT_H));
     col = mix(col, SKIRT*0.55, lip);
 
     return col;
@@ -202,18 +206,22 @@ vec3 DoorPattern(vec4 pm)
     float rib = 1.0 - smoothstep(0.004, 0.010, d);
     vec3  col = mix(STEEL, GROOVE, rib);
 
-    // Faixa diagonal amarela e preta nos 10% de baixo.
+    // Faixa diagonal amarela e preta nos 10% de baixo, suavizada com
+    // smoothstep para evitar serrilhado/flickering quando a camera se move.
     if (v < 0.10)
     {
-        float stripe = step(0.5, fract((u*1.5 + v*1.5) * 6.0));
+        float phase  = fract((u*1.5 + v*2.0) * 5.0);
+        float stripe = smoothstep(0.22, 0.28, phase) - smoothstep(0.72, 0.78, phase);
         col = mix(YELLOW, BLACK, stripe);
     }
 
     return col;
 }
 
-// Botao no piso (M6): disco colorido sobre uma placa cinza. A cor diz o
-// estado: vermelho solto, ambar apertado por algo leve, verde ativo.
+// Botao no piso (M6): disco colorido sobre uma placa cinza, com friso externo
+// luminoso na mesma cor. A cor diz o estado: vermelho solto, ambar apertado
+// por algo leve, verde ativo. O friso na borda garante leitura visual mesmo
+// quando um bloco grande (>= 1 m) cobre o centro da placa.
 vec3 ButtonPattern(vec4 pm, vec4 n, int state)
 {
     const vec3 PLATE = vec3(0.300, 0.300, 0.310);
@@ -223,15 +231,17 @@ vec3 ButtonPattern(vec4 pm, vec4 n, int state)
     if (state == PATTERN_BUTTON_LIGHT)  disc = vec3(0.900, 0.560, 0.100);
     if (state == PATTERN_BUTTON_ACTIVE) disc = vec3(0.180, 0.750, 0.260);
 
-    // Laterais da placa.
+    // Laterais da placa com faixa indicadora do estado.
     if (abs(n.y) < 0.5)
-        return PLATE * 0.8;
+        return mix(PLATE * 0.8, disc, 0.45);
 
-    float r   = length(pm.xz);         // a placa vai de -0.5 a 0.5 no modelo
+    float r       = length(pm.xz);         // a placa vai de -0.5 a 0.5 no modelo
+    float edge    = max(abs(pm.x), abs(pm.z));
     float in_disc = 1.0 - smoothstep(0.375, 0.385, r);
     float ring    = 1.0 - smoothstep(0.010, 0.018, abs(r - 0.40));
+    float border  = smoothstep(0.455, 0.465, edge) * (1.0 - smoothstep(0.488, 0.495, edge));
 
-    vec3 col = mix(PLATE, disc, in_disc);
+    vec3 col = mix(PLATE, disc, max(in_disc, border));
     return mix(col, RIM, ring);
 }
 
@@ -348,6 +358,21 @@ void main()
         Kd = DoorPattern(position_model);
     else if (pattern >= PATTERN_BUTTON_IDLE && pattern <= PATTERN_BUTTON_ACTIVE)
         Kd = ButtonPattern(position_model, n, pattern);
+    else if (uv_mode == UV_PLANAR_XY)
+    {
+        // Mapeamento tri-planar suave em coordenadas do modelo (usado no
+        // coelho): projeta nos tres planos locais (ZY, XZ, XY) ponderados pela
+        // orientacao da superficie, evitando que a textura estique nas
+        // laterais (+/-X) e no topo (+Y) da malha.
+        vec3 span = max(bbox_max.xyz - bbox_min.xyz, vec3(1e-4));
+        vec3 pm   = (position_model.xyz - bbox_min.xyz) / span;
+        vec3 nm   = normalize(transpose(mat3(model)) * n.xyz);
+        vec3 w    = pow(abs(nm), vec3(4.0));
+        w /= max(w.x + w.y + w.z, 1e-5);
+        Kd = SampleTexture(pm.zy) * w.x
+           + SampleTexture(pm.xz) * w.y
+           + SampleTexture(pm.xy) * w.z;
+    }
     else
         Kd = SampleTexture(uv);
 

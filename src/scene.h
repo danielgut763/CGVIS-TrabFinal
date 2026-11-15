@@ -171,9 +171,11 @@ namespace Puzzle
     const float MIN_ACTIVATE_HEIGHT = 1.0f;
 
     // Porta: placa que desliza para BAIXO, para dentro da parede abaixo do
-    // vao. Fica no meio da espessura da parede, sem faces coplanares.
+    // vao. Fica no meio da espessura da parede, sem faces coplanares, e ao
+    // abrir para 1 cm abaixo do peitoril (2,20 - 2,01 = 0,19 m na base e
+    // 4,20 - 2,01 = 2,19 m no topo) para nao deixar degrau na passagem.
     const float DOOR_THICKNESS = 0.10f;
-    const float DOOR_TRAVEL    = 1.99f; // para 1 cm abaixo do peitoril
+    const float DOOR_TRAVEL    = 2.01f; // para 1 cm abaixo do peitoril
     const float DOOR_SPEED     = 0.9f;  // m/s
 
     // Corredor do lado de fora da saida; chegar ao fundo dele vence a fase.
