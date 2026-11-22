@@ -193,6 +193,19 @@ bool AABBOverlapsAny(const AABB& box, const std::vector<AABB>& boxes,
     return false;
 }
 
+bool AABBOverlapsAnyExcept(const AABB& box, const std::vector<AABB>& boxes,
+                           int skip_a, int skip_b)
+{
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        if ((int)i == skip_a || (int)i == skip_b)
+            continue;
+        if (AABBOverlap(box, boxes[i]))
+            return true;
+    }
+    return false;
+}
+
 int FindBoxContainingPoint(const glm::vec3& p,
                            const std::vector<AABB>& boxes,
                            int skip_index)
@@ -211,8 +224,20 @@ bool FindSupportHeight(const AABB& box,
                        const std::vector<AABB>& boxes,
                        int skip_index,
                        float tolerance,
-                       float* out_height)
+                       float* out_height,
+                       int*   out_index)
 {
+    // Varredura para baixo: entre todas as caixas sob a pegada XZ do objeto,
+    // fica a de topo mais alto que nao esteja acima da base (com tolerancia).
+    // Nao ha limite de distancia, entao physics.cpp, ao comparar
+    // box.min.y + dy com o resultado, enxerga qualquer superficie atravessada
+    // no passo, por maior que seja |dy| (MAX_FALL_SPEED * dt).
+    //
+    // Uma caixa cujo topo esta MAIS de "tolerance" acima da base e ignorada:
+    // ou ela esta inteira acima (nao e apoio), ou o objeto ja a interpenetra
+    // (por exemplo, a AABB inclinada de um dado tombando por cima da borda da
+    // mesa), e ai o certo e o objeto seguir caindo ao lado dela.
+    int best_index = -1;
     // Mesma folga transversal de ResolveSingleAxis: caixas que so encostam
     // de lado (face com face) nao servem de apoio.
     const float EPS = 1e-4f;
@@ -242,19 +267,142 @@ bool FindSupportHeight(const AABB& box,
 
         if (!found || b.max.y > best)
         {
-            best  = b.max.y;
-            found = true;
+            best       = b.max.y;
+            best_index = (int)i;
+            found      = true;
         }
     }
 
-    if (found && out_height)
-        *out_height = best;
+    if (found && out_height) *out_height = best;
+    if (found && out_index)  *out_index  = best_index;
 
     return found;
 }
 
+bool SupportFootprint(const AABB& box,
+                      const std::vector<AABB>& boxes,
+                      int skip_index,
+                      float support_y,
+                      float tolerance,
+                      float* out_min_x, float* out_max_x,
+                      float* out_min_z, float* out_max_z)
+{
+    const float EPS = 1e-4f;
+
+    bool  found = false;
+    float mnx = 0.0f, mxx = 0.0f, mnz = 0.0f, mxz = 0.0f;
+
+    for (size_t i = 0; i < boxes.size(); ++i)
+    {
+        if ((int)i == skip_index)
+            continue;
+
+        const AABB& b = boxes[i];
+
+        // So as caixas cujo topo esta na altura de apoio.
+        if (std::fabs(b.max.y - support_y) > tolerance)
+            continue;
+
+        // Regiao de contato: intersecao das duas pegadas no plano XZ.
+        float ox0 = std::max(box.min.x, b.min.x);
+        float ox1 = std::min(box.max.x, b.max.x);
+        float oz0 = std::max(box.min.z, b.min.z);
+        float oz1 = std::min(box.max.z, b.max.z);
+
+        if (ox1 - ox0 <= EPS || oz1 - oz0 <= EPS)
+            continue;
+
+        if (!found)
+        {
+            mnx = ox0; mxx = ox1; mnz = oz0; mxz = oz1;
+            found = true;
+        }
+        else
+        {
+            mnx = std::min(mnx, ox0); mxx = std::max(mxx, ox1);
+            mnz = std::min(mnz, oz0); mxz = std::max(mxz, oz1);
+        }
+    }
+
+    if (found)
+    {
+        if (out_min_x) *out_min_x = mnx;
+        if (out_max_x) *out_max_x = mxx;
+        if (out_min_z) *out_min_z = mnz;
+        if (out_max_z) *out_max_z = mxz;
+    }
+
+    return found;
+}
+
+bool RaySphere(const glm::vec3& origin, const glm::vec3& dir,
+               const glm::vec3& center, float radius, float* out_t)
+{
+    // Substituindo p(t) = o + t*d em |p - c|^2 = r^2, com |d| = 1:
+    //     t^2 + 2*(d . m)*t + (m . m - r^2) = 0,   m = o - c
+    glm::vec3 m = origin - center;
+
+    float b = dir.x*m.x + dir.y*m.y + dir.z*m.z;
+    float c = m.x*m.x + m.y*m.y + m.z*m.z - radius*radius;
+
+    // Origem fora da esfera e raio apontando para longe dela: sem contato.
+    if (c > 0.0f && b > 0.0f)
+        return false;
+
+    float disc = b*b - c;
+    if (disc < 0.0f)
+        return false;
+
+    float t = -b - std::sqrt(disc);
+    if (t < 0.0f)
+        t = 0.0f;   // origem dentro da esfera
+
+    if (out_t)
+        *out_t = t;
+
+    return true;
+}
+
 // Resolve o deslocamento da caixa "cur" ao longo de um unico eixo (0=X, 1=Y,
 // 2=Z), truncando o passo caso alguma caixa solida da lista fique no caminho.
+//
+// E um teste de VARREDURA (swept AABB em um eixo), nao de posicao final.
+// Com a caixa andando "move" > 0 no eixo a, a face da frente percorre o
+// intervalo
+//
+//     [cur.max[a], cur.max[a] + move]
+//
+// e o obstaculo b (que se sobrepoe a caixa nos outros dois eixos) esta no
+// caminho se a sua face de tras b.min[a] cai dentro dele:
+//
+//     cur.max[a] <= b.min[a]   e   cur.max[a] + move > b.min[a].
+//
+// Nesse caso o passo encolhe para move' = b.min[a] - cur.max[a] (a caixa para
+// encostada na face). "allowed" so diminui ao longo do laco, entao no fim vale
+// o obstaculo MAIS PROXIMO. Como nada disso olha so para a posicao final, nao
+// existe passo grande demais: 2 m em um passo (20 m/s com dt = 0,1 s) contra
+// uma parede de 0,2 m param na face do mesmo jeito que 8 cm (20 m/s com o
+// passo fixo de 1/240 s). Para move < 0 e o espelho, com as faces trocadas.
+//
+// Mover um eixo por vez nao cria atalho na diagonal: depois de cada eixo a
+// caixa so ocupa posicoes que aquele eixo ja validou, e o eixo seguinte parte
+// dali, com a sobreposicao transversal recalculada na posicao nova.
+//
+// Caixa que JA comeca dentro do obstaculo (M8: o giro de tombar/rolar pode
+// inchar a AABB alguns milimetros para dentro de uma parede): o teste acima
+// nao a ve, porque a face da frente ja passou de b.min[a]. Antes, ela andava
+// livre e atravessava a parede inteira no passo seguinte. Agora ela pode SAIR
+// (andar no sentido que diminui a interpenetracao), mas nao se aprofundar:
+// andando no sentido +a, o passo e bloqueado se a caixa entrou em b pelo lado
+// -a, isto e, se
+//
+//     cur.min[a] < b.min[a]    (sobra caixa do lado -a de b)  e
+//     centro(cur)[a] < centro(b)[a]   (ela esta mais do lado -a).
+//
+// A segunda condicao desempata a caixa maior que o obstaculo (montada numa
+// parede fina): ela sai para o lado em que esta o seu centro. Uma caixa
+// afundada no piso que anda em X nao e bloqueada, porque o piso e mais largo
+// que ela em X (cur.min.x > piso.min.x).
 static float ResolveSingleAxis(AABB& cur, int axis, float move,
                                const std::vector<AABB>& boxes,
                                int skip_index, bool* out_hit)
@@ -290,26 +438,58 @@ static float ResolveSingleAxis(AABB& cur, int axis, float move,
         if (cur.max[v] <= b.min[v] + EPS || cur.min[v] >= b.max[v] - EPS)
             continue;
 
+        // Ja interpenetrando b tambem neste eixo (alem da folga EPS)?
+        const bool inside = cur.max[axis] > b.min[axis] + EPS &&
+                            cur.min[axis] < b.max[axis] - EPS;
+
+        // Duas vezes o centro, para comparar sem dividir.
+        const float c2_cur = cur.min[axis] + cur.max[axis];
+        const float c2_b   = b.min[axis]   + b.max[axis];
+
         if (move > 0.0f)
         {
-            // Obstaculo a frente no sentido positivo do eixo.
-            if (cur.max[axis] <= b.min[axis] + EPS &&
-                cur.max[axis] + allowed > b.min[axis])
+            if (!inside)
             {
-                allowed = b.min[axis] - cur.max[axis];
-                if (allowed < 0.0f)
+                // Varredura: a face da frente (max) cruza a face de tras do
+                // obstaculo (min) em algum ponto de [max, max + allowed]?
+                if (cur.max[axis] <= b.min[axis] + EPS &&
+                    cur.max[axis] + allowed > b.min[axis])
+                {
+                    allowed = b.min[axis] - cur.max[axis];
+                    if (allowed < 0.0f)
+                        allowed = 0.0f;
+                    hit = true;
+                }
+            }
+            else if (cur.min[axis] < b.min[axis] && c2_cur < c2_b)
+            {
+                // Ja dentro, tendo entrado pelo lado -a: andar em +a
+                // aprofundaria. Fica onde esta.
+                if (allowed > 0.0f)
                     allowed = 0.0f;
                 hit = true;
             }
         }
         else
         {
-            // Obstaculo a frente no sentido negativo do eixo.
-            if (cur.min[axis] >= b.max[axis] - EPS &&
-                cur.min[axis] + allowed < b.max[axis])
+            if (!inside)
             {
-                allowed = b.max[axis] - cur.min[axis];
-                if (allowed > 0.0f)
+                // Espelho: a face de tras (min) cruza a face da frente do
+                // obstaculo (max) em algum ponto de [min + allowed, min]?
+                if (cur.min[axis] >= b.max[axis] - EPS &&
+                    cur.min[axis] + allowed < b.max[axis])
+                {
+                    allowed = b.max[axis] - cur.min[axis];
+                    if (allowed > 0.0f)
+                        allowed = 0.0f;
+                    hit = true;
+                }
+            }
+            else if (cur.max[axis] > b.max[axis] && c2_cur > c2_b)
+            {
+                // Ja dentro, tendo entrado pelo lado +a: andar em -a
+                // aprofundaria.
+                if (allowed < 0.0f)
                     allowed = 0.0f;
                 hit = true;
             }

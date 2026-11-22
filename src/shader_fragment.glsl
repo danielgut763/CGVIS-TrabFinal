@@ -291,11 +291,29 @@ float PointShadowFactor(samplerCube cube, vec3 light_pos,
 
 void main()
 {
-    // Objeto emissivo (a luminaria do teto): tem cor propria e nao participa
-    // da iluminacao nem da sombra. E o que o jogador le como fonte de luz.
+    // Objeto emissivo (luminarias e painel da saida): tem cor propria e nao
+    // participa da iluminacao nem da sombra. E o que o jogador le como fonte
+    // de luz. Recebe uma textura procedural de difusor, uma grade de 5 cm
+    // em coordenadas de mundo, com o mesmo criterio das paredes: o padrao
+    // tem tamanho real fixo e nunca estica.
     if (emissive > 0.0)
     {
-        color.rgb = pow(vec3(1.0, 0.97, 0.90) * emissive, vec3(1.0)/2.2);
+        vec3  an = abs(normalize(normal).xyz);
+        vec2  guv;
+        if (an.y >= an.x && an.y >= an.z)      guv = position_world.xz;
+        else if (an.x >= an.z)                 guv = position_world.zy;
+        else                                   guv = position_world.xy;
+
+        float d    = min(GridDistance(guv.x, 0.05), GridDistance(guv.y, 0.05));
+        float line = 1.0 - smoothstep(0.004, 0.009, d);
+
+        // A cor emissiva passa de 1.0 e satura em branco, entao as linhas do
+        // difusor precisam cair bem abaixo disso para aparecerem: ficam em
+        // cerca de 40% da intensidade, um cinza claro sobre o branco.
+        vec3 base = vec3(1.0, 0.97, 0.90) * emissive;
+        base      = mix(base, base * 0.40, line);
+
+        color.rgb = pow(base, vec3(1.0)/2.2);
         color.a   = 1.0;
         return;
     }

@@ -1,5 +1,7 @@
 #include "scene.h"
 #include "matrices.h"
+#include "collisions.h"
+#include "rigid.h"
 
 std::vector<Instance> g_Instances;
 
@@ -42,11 +44,42 @@ void SceneWorldBounds(glm::vec3* out_min, glm::vec3* out_max)
 
 glm::mat4 InstanceModelMatrix(const Instance& inst)
 {
-    // T * Ry * S. A ordem importa: a escala e aplicada primeiro (mais a
-    // direita), depois a rotacao, e so entao a translacao.
+    // T * Ry * tilt * S. A ordem importa: a escala e aplicada primeiro (mais a
+    // direita), depois a inclinacao (M8), o yaw, e so entao a translacao.
     return Matrix_Translate(inst.pos.x, inst.pos.y, inst.pos.z)
          * Matrix_Rotate_Y(inst.yaw)
+         * inst.tilt
          * Matrix_Scale(inst.scale.x, inst.scale.y, inst.scale.z);
+}
+
+AABB InstanceCollisionBox(int idx, const glm::vec3& local_min, const glm::vec3& local_max)
+{
+    return InstanceCollisionBox(g_Instances[idx], idx, local_min, local_max);
+}
+
+AABB InstanceCollisionBox(const Instance& inst, int idx,
+                          const glm::vec3& local_min, const glm::vec3& local_max)
+{
+    // Objetos pegaveis (M8) podem estar inclinados (tilt). A caixa pelos 8
+    // cantos rotacionados serve para os que tem forma de caixa, mas incha os
+    // redondos: um peao deitado girando no proprio eixo cresceria ate 41% e
+    // flutuaria acima do piso. BodyWorldAABB (rigid.cpp) escolhe a caixa
+    // certa pela forma (BOX: 8 cantos; PAWN: cilindro exato; SPHERE: centro
+    // +- raio). O cenario nunca gira, entao continua com AABBTransform.
+    AABB box = inst.grabbable ? BodyWorldAABB(inst, local_min, local_max)
+                              : AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
+
+    // A porta e desenhada com 0,10 m de espessura, no meio da parede, para
+    // nao brigar no z-buffer com o pedaco de parede abaixo do vao. Na colisao
+    // ela ocupa a espessura inteira, senao sobraria uma aba de 5 cm de cada
+    // lado onde o jogador poderia se apoiar com a porta fechada.
+    if (idx == g_DoorInstance)
+    {
+        box.min.x = Room::HALF_X;
+        box.max.x = Room::HALF_X + Room::THICKNESS;
+    }
+
+    return box;
 }
 
 // Auxiliar para nao repetir a construcao de cada caixa.
@@ -243,6 +276,7 @@ void BuildScene(std::vector<Instance>& out)
             die.solid        = true;
             die.grabbable    = true;
             die.casts_shadow = true;
+            die.shape        = SHAPE_BOX;    // tomba de face em face
             out.push_back(die);
         }
     }
@@ -269,6 +303,7 @@ void BuildScene(std::vector<Instance>& out)
             rubik.solid        = true;
             rubik.grabbable    = true;
             rubik.casts_shadow = true;
+            rubik.shape        = SHAPE_BOX;
             out.push_back(rubik);
         }
     }
@@ -291,6 +326,9 @@ void BuildScene(std::vector<Instance>& out)
         pawn_phong.solid        = true;
         pawn_phong.grabbable    = true;
         pawn_phong.casts_shadow = true;
+        // Corpo de revolucao em torno do Y local, base plana em -Y: em pe
+        // tomba como caixa; deitado rola em torno do proprio eixo (M8).
+        pawn_phong.shape        = SHAPE_PAWN;
         out.push_back(pawn_phong);
 
         Instance pawn_gouraud = pawn_phong;
@@ -312,22 +350,30 @@ void BuildScene(std::vector<Instance>& out)
         brick_box.yaw          = 0.18f;
         brick_box.grabbable    = true;
         brick_box.casts_shadow = true;
+        brick_box.shape        = SHAPE_BOX;
         out.push_back(brick_box);
     }
 
-    // 5) Coelho / boneco CC0 pousado sobre o piso (a malha tem bbox_min.y ~ -0.99,
-    //    entao pos.y == scale.y apoia a base em y = 0) e pegavel na mecanica.
+    // 5) Coelho / boneco CC0 pousado sobre o piso e pegavel na mecanica. A
+    //    malha tem bbox_min.y = -0.991, entao a base fica em
+    //    pos.y - 0.991*scale.y: pos.y = 0.991*scale.y apoia exatamente em
+    //    y = 0 (com pos.y = scale.y ele nascia 2,9 mm acima e caia no
+    //    primeiro quadro).
     {
+        const float bunny_s = 0.32f;
         Instance bunny;
         bunny.mesh         = "the_bunny";
-        bunny.pos          = glm::vec3(-3.8f, 0.32f, 2.4f);
+        bunny.pos          = glm::vec3(-3.8f, 0.991f*bunny_s, 2.4f);
         bunny.yaw          = -0.6f;
-        bunny.scale        = glm::vec3(0.32f);
+        bunny.scale        = glm::vec3(bunny_s);
         bunny.mat          = MakeMaterial(1, UV_PLANAR_XY, 1.0f, 0.18f, 24.0f,
                                           PATTERN_TEXTURE, 0.0f, SHADING_PHONG);
         bunny.solid        = true;
         bunny.grabbable    = true;
         bunny.casts_shadow = true;
+        // A malha nao e uma caixa, mas nao rola: tomba e assenta na face da
+        // bbox mais proxima, como uma caixa (M8).
+        bunny.shape        = SHAPE_BOX;
         out.push_back(bunny);
     }
 
@@ -347,6 +393,34 @@ void BuildScene(std::vector<Instance>& out)
         sphere.casts_shadow = true;
         g_BezierInstance = (int)out.size();
         out.push_back(sphere);
+    }
+
+    // 6b) Bola pegavel (M8): a mesma malha "the_sphere" (raio 1 no modelo)
+    //     com escala 0.18, ou seja, uma bola de 0,18 m de raio. E o objeto
+    //     que mostra o rolamento: SHAPE_SPHERE rola em qualquer direcao, sem
+    //     deslizar (roll.h). A textura usa UV_SPHERE, que e calculada nas
+    //     coordenadas do MODELO, entao o padrao gira junto com a bola e o
+    //     rolamento fica visivel. Tijolo (TextureImage0) e Phong para nao
+    //     confundir com a esfera da Bezier (rocha, Gouraud).
+    //
+    //     Vem DEPOIS da esfera da Bezier: quem procura a primeira "the_sphere"
+    //     continua achando a decorativa, e g_BezierInstance nao muda.
+    //     Posicao: piso livre na frente da parede +Z, longe do spawn do
+    //     jogador (-4.6, 0, 0), do botao e dos outros objetos.
+    {
+        const float ball_r = 0.18f;
+        Instance ball;
+        ball.mesh         = "the_sphere";
+        ball.pos          = glm::vec3(0.9f, ball_r, 3.2f);
+        ball.yaw          = 0.0f;
+        ball.scale        = glm::vec3(ball_r);
+        ball.mat          = MakeMaterial(0, UV_SPHERE, 1.0f, 0.25f, 32.0f,
+                                         PATTERN_TEXTURE, 0.0f, SHADING_PHONG);
+        ball.solid        = true;
+        ball.grabbable    = true;
+        ball.casts_shadow = true;
+        ball.shape        = SHAPE_SPHERE;
+        out.push_back(ball);
     }
 
     // 7) Botao do puzzle (M6): placa fina no piso, a frente da saida. Nao e

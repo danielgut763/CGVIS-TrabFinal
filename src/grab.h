@@ -40,6 +40,24 @@ namespace GrabConfig
     // solta o botao para largar, e o objeto cai com gravidade (physics.h).
     // false: um clique pega e outro clique solta, como era no M2.
     const bool  HOLD_TO_CARRY = true;
+
+    // Velocidade herdada ao soltar (M8). Com true, o objeto sai da mao com a
+    // velocidade que o seu centro tinha nos ultimos instantes (media
+    // exponencial com constante de tempo RELEASE_VEL_TAU), limitada a
+    // RELEASE_MAX_SPEED: da para "jogar" de leve uma bola, que sai rolando.
+    // Com false, o objeto e solto parado, como no M7.
+    //
+    // O limite e necessario por causa da propria perspectiva forcada: o
+    // centro do objeto na mao fica a uma distancia d da camera, entao girar
+    // a camera a omega rad/s move o centro a v = omega*d. Um objeto
+    // aumentado a 6 m de distancia, com uma virada de mouse de 3 rad/s,
+    // andaria a 18 m/s e seria arremessado pela sala, alem de a distancia d
+    // saltar quando o raio passa pela quina de algum objeto (o objeto
+    // "teletransporta" metros num quadro). Nenhuma das duas coisas e um
+    // movimento da mao do jogador; 2 m/s e um arremesso suave.
+    const bool  INHERIT_RELEASE_VELOCITY = true;
+    const float RELEASE_MAX_SPEED        = 2.0f;  // m/s
+    const float RELEASE_VEL_TAU          = 0.08f; // s
 }
 
 struct GrabState
@@ -52,8 +70,8 @@ struct GrabState
                          // E o que prende o objeto ao mesmo ponto da tela.
     float d0;            // distancia camera->centro naquele instante
     float s0;            // escala uniforme do objeto naquele instante
-    float r0;            // meia-extensao do objeto ao longo do raio, em d0
-    float yaw0;          // rotacao original do objeto
+    float yaw0;          // rotacao original do objeto (em torno do Y do mundo;
+                         // a inclinacao Instance::tilt fica como estava)
     bool  was_solid;     // se o objeto era solido antes de ser pego
 
     // --- Estado controlado pelo jogador enquanto carrega ---
@@ -64,6 +82,11 @@ struct GrabState
     float cur_distance;
     float cur_factor;    // escala atual dividida por s0
     bool  blocked;       // verdadeiro se o objeto nao cabe onde esta mirando
+
+    // --- Velocidade do centro na mao (M8), herdada ao soltar ---
+    glm::vec3 vel_avg;     // media exponencial da velocidade do centro (m/s)
+    glm::vec3 last_center; // centro no ultimo GrabUpdate com dt > 0
+    bool      has_last;    // last_center valido
 };
 
 // Implementada em main.cpp: bounding box LOCAL da malha (vem de g_VirtualScene,
@@ -91,19 +114,25 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
                  const std::vector<int>& box_instance);
 
 // Recalcula a cada quadro a posicao e a escala do objeto carregado.
+// "dt" (s) e usado so para medir a velocidade do objeto na mao, herdada ao
+// soltar (GrabConfig::INHERIT_RELEASE_VELOCITY). Com dt <= 0 a medida e
+// zerada e o objeto sera solto parado.
 void GrabUpdate(GrabState& g, const Camera& cam,
                 const std::vector<AABB>& boxes,
                 const std::vector<int>& box_instance,
-                const AABB& player_box);
+                const AABB& player_box,
+                float dt = 0.0f);
 
 // Solta o objeto na posicao atual. Devolve false (e continua segurando) se o
-// objeto nao couber ali sem atravessar a cena ou o proprio jogador.
+// objeto nao couber ali sem atravessar a cena ou o proprio jogador. Ao
+// soltar, o objeto entra em MOTION_FALL com a velocidade herdada da mao.
 bool GrabTryRelease(GrabState& g, Camera& cam,
                     const std::vector<AABB>& boxes,
                     const std::vector<int>& box_instance,
                     const AABB& player_box);
 
-// Rotacao do objeto na mao (teclas Q e E), em radianos.
+// Rotacao do objeto na mao (teclas Q e E), em radianos, em torno do Y do
+// MUNDO e do centro do objeto (mesmo que ele esteja tombado).
 void GrabRotate(GrabState& g, float delta_yaw);
 
 // Ajuste do alcance pela roda do mouse: aproxima ou afasta o objeto, o que

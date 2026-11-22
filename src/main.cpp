@@ -298,6 +298,12 @@ bool      g_ShadowEnabled = true;
 // dependa da maquina. Requisito de "animacao baseada no tempo" do enunciado.
 float g_DeltaTime = 0.0f;
 
+// Passo fixo da fisica dos objetos (M8). Tempo de jogo que ainda nao foi
+// simulado pelos objetos soltos: cada quadro soma g_DeltaTime aqui e consome
+// em fatias de PhysicsConfig::FIXED_STEP (ver o laco principal). Sempre fica
+// em [0, FIXED_STEP) entre um quadro e outro. Zerado no reinicio (tecla N).
+float g_PhysicsAccumulator = 0.0f;
+
 // Número de texturas carregadas pela função LoadTextureImage()
 GLuint g_NumLoadedTextures = 0;
 
@@ -529,6 +535,11 @@ int main(int argc, char* argv[])
             PlayerInit(g_Player, glm::vec3(-4.6f, 0.0f, 0.0f));
             CameraInit(g_Camera, PlayerEyePosition(g_Player), 0.0f, 0.0f);
             g_Camera.lookat_instance = g_BezierInstance;
+
+            // Tempo de fisica que sobrou da fase anterior nao vale para a
+            // nova: sem isto, os objetos recem-reposicionados dariam um
+            // passo a mais (ou a menos) logo no primeiro quadro.
+            g_PhysicsAccumulator = 0.0f;
         }
 
         // ------------------------------------------------------------------
@@ -634,13 +645,39 @@ int main(int argc, char* argv[])
                 // Um pedido de largar que sobrou de antes nao vale para o
                 // objeto que esta sendo pego agora.
                 g_GrabDropPending = false;
-                GrabTryPick(g_Grab, g_Camera, g_ScreenRatio,
-                            (float)g_GrabNdcX, (float)g_GrabNdcY,
-                            solid_boxes, box_instance);
+                bool picked = GrabTryPick(g_Grab, g_Camera, g_ScreenRatio,
+                                          (float)g_GrabNdcX, (float)g_GrabNdcY,
+                                          solid_boxes, box_instance);
 
                 // Clique rapido: o botao ja foi solto antes deste quadro.
-                if (GrabConfig::HOLD_TO_CARRY && !g_LeftMouseButtonPressed)
+                if (picked && GrabConfig::HOLD_TO_CARRY && !g_LeftMouseButtonPressed)
                     g_GrabDropPending = true;
+
+                // Nada pegavel sob a mira: se o clique acertou a esfera da
+                // curva de Bezier (teste raio x esfera, collisions.cpp), a
+                // camera look-at passa a segui-la. A esfera nao e solida e
+                // nao esta na lista de AABBs, por isso o teste separado; e
+                // uma parede na frente dela continua tendo prioridade.
+                if (!picked && g_BezierInstance >= 0 &&
+                    g_BezierInstance < (int)g_Instances.size())
+                {
+                    glm::vec3 origin, dir;
+                    BuildCursorRay(g_Camera, g_ScreenRatio,
+                                   (float)g_GrabNdcX, (float)g_GrabNdcY,
+                                   &origin, &dir);
+
+                    const Instance& sph = g_Instances[g_BezierInstance];
+                    glm::vec3 center = InstanceWorldCenter(g_BezierInstance);
+                    float     radius = sph.scale.x;   // sphere.obj tem raio 1
+
+                    float t_sphere = 0.0f;
+                    if (RaySphere(origin, dir, center, radius, &t_sphere))
+                    {
+                        RayHit wall = RaycastBoxes(origin, dir, solid_boxes, -1);
+                        if (!wall.hit || t_sphere < wall.t)
+                            CameraEnterLookAt(g_Camera, g_BezierInstance, center);
+                    }
+                }
             }
             else if (!GrabConfig::HOLD_TO_CARRY)
             {
@@ -674,8 +711,11 @@ int main(int argc, char* argv[])
 
         if (g_Camera.mode == CAM_FIRST_PERSON)
         {
+            // g_DeltaTime (M8): GrabUpdate mede quanto o centro do objeto
+            // andou neste quadro, v = (c_agora - c_antes) / dt, e e com essa
+            // velocidade que ele sai da mao ao ser solto (ver grab.h).
             GrabUpdate(g_Grab, g_Camera, solid_boxes, box_instance,
-                       PlayerAABB(g_Player));
+                       PlayerAABB(g_Player), g_DeltaTime);
         }
 
         if (g_GrabDropPending)
@@ -688,12 +728,80 @@ int main(int argc, char* argv[])
         }
 
         // ------------------------------------------------------------------
-        // Gravidade dos objetos soltos e logica da fase (M6).
+        // Gravidade dos objetos soltos (M6) com PASSO FIXO (M8).
         //
         // Depois do pegar/soltar deste quadro: um objeto largado agora ja
         // comeca a cair, e o botao enxerga as posicoes atualizadas.
+        //
+        // Ate o M7 a fisica dos objetos andava um passo por quadro com o
+        // proprio g_DeltaTime. Agora ela anda em passos de tamanho CONSTANTE
+        // h = PhysicsConfig::FIXED_STEP (1/240 s), com um acumulador:
+        //
+        //     acc <- acc + dt_quadro
+        //     enquanto acc >= h:   simula h;   acc <- acc - h
+        //
+        // O que sobra em acc (menos que h) fica para o quadro seguinte, entao
+        // em media a fisica avanca exatamente o tempo real decorrido. A 60
+        // quadros por segundo isso da 4 passos por quadro; a 240, 1 passo.
+        //
+        // Por que so os objetos usam passo fixo:
+        //   - Os objetos sao os que EMPILHAM, TOMBAM e ROLAM. O tombo integra
+        //     um pendulo (alpha = torque/I) por Euler, o rolamento integra
+        //     atrito e quique, e o sono depende de limiares de velocidade:
+        //     com dt variavel o mesmo arremesso terminaria em lugares
+        //     diferentes a 30 e a 144 quadros por segundo. Com h constante o
+        //     resultado nao depende da maquina.
+        //   - h pequeno limita o quanto o objeto anda e GIRA por passo. A
+        //     translacao ja e testada por varredura (collisions.cpp), mas a
+        //     ROTACAO de tombar/rolar so e testada na pose final do passo
+        //     (tip.cpp desfaz o giro se a caixa nova entra em algo); com
+        //     h = 1/240 s, a 20 m/s (MAX_FALL_SPEED) o objeto anda 8,3 cm por
+        //     passo, menos que os 20 cm de uma parede, e a 10 rad/s gira so
+        //     0,04 rad.
+        //   - O jogador continua por quadro: o movimento dele e cinematico
+        //     (velocidade de caminhada constante, pulo), a colisao dele ja e
+        //     resolvida eixo a eixo por varredura com dt limitado a 0,1 s, e
+        //     a camera, que esta presa aos olhos dele, PRECISA andar todo
+        //     quadro (se andasse em passos de fisica, a imagem avancaria 1 ou
+        //     2 passos alternadamente e tremeria). Pelo mesmo motivo o objeto
+        //     na mao (GrabUpdate, preso ao raio da camera) e a porta/botao
+        //     (LevelUpdate, porta com velocidade constante) ficam por quadro.
+        //
+        // Durante os sub-passos o jogador fica parado na posicao deste
+        // quadro: a caixa dele entra como obstaculo constante.
+        //
+        // Teto de MAX_SUBSTEPS por quadro (24 * 1/240 s = 0,1 s, o mesmo
+        // limite de g_DeltaTime). Se a maquina nao der conta, o que sobrar e
+        // DESCARTADO em vez de acumulado: acumular faria o proximo quadro
+        // simular ainda mais passos, ficar ainda mais lento, e assim por
+        // diante (a "espiral da morte"). Descartando, o jogo so fica em
+        // camera lenta enquanto a maquina estiver sobrecarregada. Com os
+        // valores atuais o limite de 0,1 s de g_DeltaTime ja segura quase
+        // tudo; o teto protege o caso de alguem diminuir FIXED_STEP sem
+        // aumentar MAX_SUBSTEPS (test/t_b1.cpp, C2).
         // ------------------------------------------------------------------
-        UpdateFallingObjects(g_Grab.instance, PlayerAABB(g_Player), g_DeltaTime);
+        {
+            const float h = PhysicsConfig::FIXED_STEP;
+            AABB player_box = PlayerAABB(g_Player);
+
+            g_PhysicsAccumulator += g_DeltaTime;
+
+            int substeps = 0;
+            while (g_PhysicsAccumulator >= h && substeps < PhysicsConfig::MAX_SUBSTEPS)
+            {
+                UpdateFallingObjects(g_Grab.instance, player_box, h);
+                g_PhysicsAccumulator -= h;
+                ++substeps;
+            }
+
+            // Bateu no teto e ainda sobrou pelo menos um passo inteiro:
+            // descarta (ver acima).
+            if (g_PhysicsAccumulator >= h)
+                g_PhysicsAccumulator = 0.0f;
+        }
+
+        // Logica da fase (M6), por quadro: o botao enxerga as posicoes dos
+        // objetos depois de todos os sub-passos deste quadro.
         LevelUpdate(g_Level, g_Grab.instance, PlayerAABB(g_Player), g_DeltaTime);
 
         glm::vec4 camera_position_c = CameraEyePosition(g_Camera);
@@ -785,15 +893,10 @@ int main(int argc, char* argv[])
         glUniformMatrix4fv(g_view_uniform       , 1 , GL_FALSE , glm::value_ptr(view));
         glUniformMatrix4fv(g_projection_uniform , 1 , GL_FALSE , glm::value_ptr(projection));
 
-        // Fonte de luz unica, proxima ao teto no centro da sala. Ela sera o
-        // ponto de vista do shadow map quando as sombras entrarem (M4).
-        // Luminaria em faixa: mandamos os dois extremos do segmento. O
-        // shader procura o ponto mais proximo dele para cada fragmento, e por
-        // isso a direcao da luz varia pela sala em vez de ser a mesma em todo
-        // lugar.
-        // As duas luminarias, ambas pontuais. A posicao mandada aqui e a
-        // MESMA usada para montar o cube map de cada uma, entao sombreamento
-        // e sombra nunca discordam.
+        // As duas luminarias. A luz 1 e pontual, no centro da faixa do teto;
+        // a luz 2 e o spotlight do pendente. A posicao mandada aqui e a MESMA
+        // usada para montar o cube map de cada uma, entao sombreamento e
+        // sombra nunca discordam.
         glm::vec3 lamp1 = (g_LampP0 + g_LampP1) * 0.5f;
         glUniform4f(g_light1_pos_uniform, lamp1.x, lamp1.y, lamp1.z, 1.0f);
         glUniform3f(g_light1_color_uniform, 1.70f, 1.66f, 1.52f);
@@ -1031,7 +1134,9 @@ void DrawInstance(const Instance& inst)
 
 // Devolve a AABB em coordenadas de mundo de cada instancia solida da cena.
 // A bounding box LOCAL vem de g_VirtualScene, preenchida pelo carregador de
-// OBJ; AABBTransform (collisions.cpp) leva os 8 cantos para mundo.
+// OBJ; InstanceCollisionBox (scene.cpp) leva para mundo do mesmo jeito que a
+// fisica (8 cantos com AABBTransform para o cenario e caixas; forma do corpo
+// para bola e peao inclinados, ver rigid.h).
 std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box)
 {
     std::vector<AABB> boxes;
@@ -1054,19 +1159,11 @@ std::vector<AABB> BuildSolidAABBs(std::vector<int>* out_instance_of_box)
         if (it == g_VirtualScene.end())
             continue;
 
-        AABB box = AABBTransform(it->second.bbox_min,
-                                 it->second.bbox_max,
-                                 InstanceModelMatrix(inst));
-        // A porta e desenhada com 0,10 m de espessura para nao brigar no
-        // z-buffer com a parede abaixo do vao, mas na colisao ocupa toda a
-        // espessura da parede para nao criar uma aba de 5 cm onde o jogador
-        // pudesse se apoiar com a porta fechada.
-        if ((int)i == g_DoorInstance)
-        {
-            box.min.x = Room::HALF_X;
-            box.max.x = Room::HALF_X + Room::THICKNESS;
-        }
-        boxes.push_back(box);
+        // InstanceCollisionBox (scene.cpp) e quem sabe que a porta colide
+        // com a espessura inteira da parede, embora seja desenhada mais fina.
+        boxes.push_back(InstanceCollisionBox((int)i,
+                                             it->second.bbox_min,
+                                             it->second.bbox_max));
 
         // As instancias nao solidas sao puladas, entao o indice da caixa NAO e
         // o indice da instancia. Este vetor paralelo faz a correspondencia,
@@ -1094,6 +1191,12 @@ bool GetMeshLocalBBox(const std::string& mesh, glm::vec3* out_min, glm::vec3* ou
 // Centro da AABB em coordenadas de mundo para a instancia "idx". Usado pela
 // camera look-at para orbitar o centro geometrico real do objeto (mesmo quando
 // a origem do OBJ fica na base da malha, como no coelho).
+//
+// A caixa vem de InstanceCollisionBox, a MESMA que a fisica usa (M8): para um
+// objeto inclinado, a bola e o peao ela e calculada pela forma do corpo
+// (rigid.h, BodyWorldAABB) e nao pelos 8 cantos. Como essas caixas sao
+// simetricas em torno do centro do corpo, o centro delas e o centro de massa
+// que a fisica faz cair, tombar e rolar, e a camera orbita exatamente ele.
 glm::vec3 InstanceWorldCenter(int idx)
 {
     if (idx < 0 || idx >= (int)g_Instances.size())
@@ -1103,7 +1206,7 @@ glm::vec3 InstanceWorldCenter(int idx)
     glm::vec3 local_min, local_max;
     if (GetMeshLocalBBox(inst.mesh, &local_min, &local_max))
     {
-        AABB box = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
+        AABB box = InstanceCollisionBox(idx, local_min, local_max);
         return AABBCenter(box);
     }
 
@@ -1979,16 +2082,33 @@ void TextRendering_ShowEulerAngles(GLFWwindow* window)
     {
         const char* target_name = "cena";
         const char* shading_str = "Phong";
+        const char* motion_str  = "";   // estado de movimento (M8), so pegaveis
         if (g_Camera.lookat_instance >= 0 && g_Camera.lookat_instance < (int)g_Instances.size())
         {
             const Instance& ti = g_Instances[g_Camera.lookat_instance];
             target_name = (g_Camera.lookat_instance == g_BezierInstance) ? "esfera (Bezier)" : ti.mesh.c_str();
             shading_str = (ti.mat.shading == SHADING_GOURAUD) ? "Gouraud" : "Blinn-Phong";
+
+            // Mostra em que estado da maquina de physics.h o objeto
+            // observado esta: util para conferir na apresentacao que o dado
+            // TOMBA e a bola ROLA.
+            if (ti.grabbable)
+            {
+                switch (ti.body.motion)
+                {
+                    case MOTION_REST:   motion_str = " | REST";   break;
+                    case MOTION_FALL:   motion_str = " | FALL";   break;
+                    case MOTION_TIP:    motion_str = " | TIP";    break;
+                    case MOTION_SETTLE: motion_str = " | SETTLE"; break;
+                    case MOTION_ROLL:   motion_str = " | ROLL";   break;
+                    default:            motion_str = " | ?";      break;
+                }
+            }
         }
 
         snprintf(buffer, sizeof(buffer),
-                 "[Look-At: %s | %s] Dist: %.2f | Theta: %.2f Phi: %.2f | [C] 1aP [V] Alvo",
-                 target_name, shading_str, g_Camera.lookat_distance,
+                 "[Look-At: %s | %s%s] Dist: %.2f | Theta: %.2f Phi: %.2f | [C] 1aP [V] Alvo",
+                 target_name, shading_str, motion_str, g_Camera.lookat_distance,
                  g_Camera.lookat_theta, g_Camera.lookat_phi);
     }
 

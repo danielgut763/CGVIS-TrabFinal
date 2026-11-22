@@ -4,14 +4,18 @@
 
 #include "grab.h"   // GetMeshLocalBBox
 
-// AABB em mundo de uma instancia, a partir da bbox local da malha.
-static bool InstanceAABB(const Instance& inst, AABB* out)
+// Caixa de colisao em mundo da instancia "idx", a partir da bbox local da
+// malha. Passa por InstanceCollisionBox (scene.cpp), a mesma caixa da fisica:
+// com objetos tombados (M8), a caixa dos 8 cantos de um peao deitado e mais
+// alta que ele, e o botao poderia contar como "pesado" um objeto que na
+// fisica tem outra altura.
+static bool InstanceAABB(const Instance& inst, int idx, AABB* out)
 {
     glm::vec3 lmin, lmax;
     if (!GetMeshLocalBBox(inst.mesh, &lmin, &lmax))
         return false;
 
-    *out = AABBTransform(lmin, lmax, InstanceModelMatrix(inst));
+    *out = InstanceCollisionBox(inst, idx, lmin, lmax);
     return true;
 }
 
@@ -93,7 +97,7 @@ void LevelUpdate(LevelState& L, int held_instance, const AABB& player_box, float
             continue;
 
         AABB box;
-        if (!InstanceAABB(inst, &box) || !AABBOverlap(box, zone))
+        if (!InstanceAABB(inst, (int)i, &box) || !AABBOverlap(box, zone))
             continue;
 
         L.button_pressed = true;
@@ -157,10 +161,12 @@ void LevelUpdate(LevelState& L, int held_instance, const AABB& player_box, float
             AABB door_box;
             bool blocked = false;
 
-            if (InstanceAABB(probe, &door_box))
+            glm::vec3 lmin, lmax;
+            if (GetMeshLocalBBox(probe.mesh, &lmin, &lmax))
             {
-                door_box.min.x = Room::HALF_X;
-                door_box.max.x = Room::HALF_X + Room::THICKNESS;
+                // A porta colide com a espessura inteira da parede; quem sabe
+                // disso e InstanceCollisionBox (scene.cpp).
+                door_box = InstanceCollisionBox(probe, g_DoorInstance, lmin, lmax);
 
                 if (AABBOverlap(door_box, player_box))
                     blocked = true;
@@ -172,7 +178,7 @@ void LevelUpdate(LevelState& L, int held_instance, const AABB& player_box, float
                         continue;
 
                     AABB ob;
-                    if (InstanceAABB(o, &ob) && AABBOverlap(door_box, ob))
+                    if (InstanceAABB(o, (int)i, &ob) && AABBOverlap(door_box, ob))
                         blocked = true;
                 }
             }

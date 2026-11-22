@@ -69,12 +69,57 @@ Material MakeMaterial(int texture_id, int uv_mode, float uv_scale,
                       int pattern = PATTERN_TEXTURE, float emissive = 0.0f,
                       int shading = SHADING_PHONG);
 
+// Forma fisica de um objeto pegavel (M8: tombar e rolar). Decide quais poses
+// sao estaveis e se o objeto rola.
+enum BodyShape
+{
+    SHAPE_BOX    = 0, // dado, cubo magico, tijolo, coelho: tomba de face em
+                      // face (poses estaveis: algum eixo local na vertical)
+    SHAPE_SPHERE = 1, // bola: qualquer pose e estavel, rola sem deslizar
+    SHAPE_PAWN   = 2  // corpo de revolucao em torno do Y local, com base
+                      // plana em -Y: em pe e estavel; deitado (Y local na
+                      // horizontal) rola em torno do proprio eixo
+};
+
+// Estado de movimento de um objeto pegavel solto (M8, ver physics.h).
+enum MotionState
+{
+    MOTION_REST   = 0, // apoiado, parado (ou dormindo)
+    MOTION_FALL   = 1, // no ar: cai e gira com ang_vel em torno do centro
+    MOTION_TIP    = 2, // tombando: gira em torno de uma aresta do apoio
+    MOTION_SETTLE = 3, // acabou de pousar torto: assentando numa pose estavel
+    MOTION_ROLL   = 4  // rolando sobre o apoio (bola, peao deitado)
+};
+
+// Estado fisico de rotacao (M8). Zerado quando o objeto e pego.
+struct BodyState
+{
+    int       motion  = MOTION_REST;
+    glm::vec3 ang_vel = glm::vec3(0.0f); // velocidade angular em MUNDO, rad/s
+                                         // (direcao = eixo, modulo = rapidez)
+    glm::vec3 pivot   = glm::vec3(0.0f); // TIP: ponto da aresta de apoio (mundo)
+    glm::vec3 axis    = glm::vec3(0.0f); // TIP/SETTLE: eixo unitario em mundo
+    float     angle   = 0.0f;            // TIP: angulo ja girado; SETTLE: angulo que falta
+    float     timer   = 0.0f;            // tempo no estado atual (s)
+    float     sleep   = 0.0f;            // tempo parado; acima de SLEEP_TIME dorme
+    int       support = -1;              // instancia que apoiava no ultimo passo (-1 = nenhuma/cenario)
+};
+
 struct Instance
 {
     std::string mesh;      // chave em g_VirtualScene, ex: "the_cube"
     glm::vec3   pos;       // posicao do CENTRO em coordenadas de mundo
     float       yaw;       // rotacao em torno de Y, em radianos
     glm::vec3   scale;     // escala por eixo (paredes usam escala nao uniforme)
+
+    // Inclinacao do objeto (M8): rotacao aplicada ANTES do yaw, no referencial
+    // do objeto ja girado pelo yaw. Identidade para tudo que nunca tombou.
+    // Model = T * Ry(yaw) * tilt * S. Assim Q/E (yaw) continua girando o
+    // objeto em torno do Y do MUNDO mesmo depois de ele ter tombado.
+    glm::mat4   tilt = glm::mat4(1.0f);
+
+    int         shape = SHAPE_BOX;  // BodyShape (so importa para pegaveis)
+    BodyState   body;
     Material    mat;
 
     bool solid;            // participa dos testes de colisao
@@ -94,13 +139,28 @@ struct Instance
     // exatamente o que interessa para o jogador perceber o tamanho deles.
     bool casts_shadow;
 
-    // Velocidade vertical em m/s dos objetos pegaveis quando estao soltos e
-    // caindo (M6, ver physics.h). Zero quando apoiados ou na mao.
-    float vel_y = 0.0f;
+    // Velocidade em m/s dos objetos pegaveis quando estao soltos (M6/M7, ver
+    // physics.h): queda em Y e deslizamento em XZ quando o objeto perde o
+    // equilibrio. Zero quando apoiado ou na mao.
+    glm::vec3 vel = glm::vec3(0.0f);
 };
 
-// Model matrix da instancia: T * Ry * S, aplicada da direita para a esquerda.
+// Model matrix da instancia: T * Ry(yaw) * tilt * S, aplicada da direita para
+// a esquerda.
 glm::mat4 InstanceModelMatrix(const Instance& inst);
+
+// AABB em mundo usada nos TESTES DE COLISAO da instancia de indice "idx",
+// a partir da bounding box local da malha. E o unico lugar que sabe que a
+// porta e desenhada com 0,10 m de espessura mas colide com os 0,20 m da
+// parede (ver scene.cpp). Tudo que monta lista de caixas (main.cpp,
+// physics.cpp, level.cpp) passa por aqui, para nunca discordar.
+struct AABB;
+AABB InstanceCollisionBox(int idx, const glm::vec3& local_min, const glm::vec3& local_max);
+
+// Mesma coisa para uma copia da instancia em outra posicao (a porta sendo
+// testada antes de se mover, em level.cpp). "idx" diz qual instancia ela e.
+AABB InstanceCollisionBox(const Instance& inst, int idx,
+                          const glm::vec3& local_min, const glm::vec3& local_max);
 
 // Lista global dos objetos desenhados a cada quadro.
 extern std::vector<Instance> g_Instances;
@@ -113,21 +173,15 @@ extern int g_BezierInstance;
 extern int g_ButtonInstance;   // botao no piso
 extern int g_DoorInstance;     // porta que fecha a saida elevada
 
-// Extremos do segmento que representa a luminaria em faixa, definidos em
-// BuildScene.
-//
-// A iluminacao NAO usa uma direcao fixa nem um ponto unico: para cada
-// fragmento ela procura o ponto mais proximo DESTE SEGMENTO. E isso que faz a
-// luz chegar na vertical para quem esta embaixo da faixa e inclinada para
-// quem esta ao lado dela, que e como uma luminaria comprida se comporta de
-// verdade. Com uma luz direcional, todo ponto da sala recebia luz com a mesma
-// inclinacao, inclusive os que estao exatamente sob a luminaria.
+// Extremos da luminaria curta no centro do teto, definidos em BuildScene. A
+// luz 1 e uma fonte PONTUAL no ponto medio entre eles; e essa posicao que o
+// shader e o cube map de sombra usam.
 extern glm::vec3 g_LampP0;
 extern glm::vec3 g_LampP1;
 
 // Posicao da segunda luminaria: o pendente em cone na quina oposta a porta.
-// E uma fonte PONTUAL, com queda mais rapida que a faixa central, e serve de
-// luz de apoio para aquele canto da sala.
+// E um SPOTLIGHT apontado para baixo, com queda mais rapida que a luz
+// central, e serve de luz de apoio para aquele canto da sala.
 extern glm::vec3 g_Lamp2Pos;
 
 // ---------------------------------------------------------------------------

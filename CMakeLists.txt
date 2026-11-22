@@ -15,6 +15,9 @@ set(SOURCES
   src/player.cpp
   src/bezier.cpp
   src/physics.cpp
+  src/rigid.cpp
+  src/tip.cpp
+  src/roll.cpp
   src/level.cpp
   src/correcao.cpp
   src/textrendering.cpp

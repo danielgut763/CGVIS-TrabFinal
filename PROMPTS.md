@@ -402,3 +402,63 @@ execute the m7
 
 **O que foi aproveitado:** <preencher após revisão — o que foi mantido, o que
 foi corrigido à mão e por quê>
+
+
+### 2026-11-15 — Revisão pós-M7: equilíbrio dos objetos, pilha, limpeza e textura nos emissivos
+
+**Commit:** `<preencher com o hash>`
+
+**Arquivos gerados/alterados por IA:** `src/collisions.h`, `src/collisions.cpp`,
+`src/physics.h`, `src/physics.cpp`, `src/level.cpp`, `src/scene.h`,
+`src/scene.cpp`, `src/grab.h`, `src/grab.cpp`, `src/main.cpp`,
+`src/shader_fragment.glsl`
+
+**Prompt:**
+
+```
+m7 feito pelo dani
+faz um double check em todo o projeto.
+aponta melhorias e possívels correções. Cita aqui tudo depois da análise. Não cria nada, por hora, nem modifica nada
+[...]
+4) textura nos emissivos e um quarto teste de intersecção, se sobrar tempo; (5) os ajustes de código do M7 (override da porta em função única, velocidade herdada na pilha, comentários velhos).
+
+revisa, altera, testa. Segue também uma correção na imagem em anexo, onde o cubo deveria cair, mas ficou em cima, cadê o ponto de equilíbrio dos objetos. Se eu colocar um peão na mesma posição ele deveria cair, rolar no chão... mas ele só fica de pé. Vamos pensar em ajustar
+```
+
+**Ferramenta:** Claude (Anthropic)
+
+**Resumo do que foi gerado:**
+
+- Equilíbrio (`physics.cpp`, `SupportFootprint` em `collisions.cpp`): um
+  objeto apoiado só fica parado se a projeção do centro da sua AABB cair
+  dentro da área de apoio (união das regiões de contato com as caixas na
+  altura de apoio). Se não cai, ele acelera horizontalmente para o lado em
+  que está pendurado (4 m/s², até 1,6 m/s), com o deslocamento resolvido por
+  `ResolveAABBMovement`, até perder o contato e cair. Objeto apoiado sobre
+  dois outros com o centro no vão entre eles continua em pé. Tombamento com
+  rotação não foi implementado: toda a cena assume rotação só em Y.
+- Pilha: `FindSupportHeight` passou a devolver o índice do apoio; o objeto de
+  cima herda a velocidade vertical de um apoio que está caindo, em vez de
+  zerar e ficar um passo atrás (folga de 4,5 cm durante a queda caiu a zero).
+- `InstanceCollisionBox` em `scene.cpp` é o único lugar que sabe que a porta
+  colide com a espessura inteira da parede; `main.cpp`, `physics.cpp` e
+  `level.cpp` passaram a usá-la (antes o ajuste estava copiado nos três).
+- `Instance::vel_y` virou `glm::vec3 vel`; campo morto `GrabState::r0`
+  removido; comentários antigos de "luz única"/"luz em segmento" em
+  `main.cpp` e `scene.h` reescritos.
+- Quarto teste de intersecção: `RaySphere` (quadrática analítica) em
+  `collisions.cpp`. Clicar na esfera da curva de Bézier, que não é sólida e
+  não entra na lista de AABBs, leva a câmera look-at até ela, com uma parede
+  na frente tendo prioridade.
+- Emissivos (luminárias e painel da saída) recebem textura procedural de
+  difusor: grade de 5 cm em coordenadas de mundo, linhas a 40% da intensidade
+  para aparecerem apesar da saturação.
+
+**Validação:** compilação de todos os `.cpp`; shaders compilados e linkados
+em WebGL2; teste de lógica sem janela: cubo com centro 3,6 cm fora da borda
+de um dado de 1,5 m desliza e chega ao chão em 0,98 s; com o centro 3,6 cm
+para dentro, fica; peão apoiado como ponte sobre dois cubos fica; pilha solta
+no ar desce unida; objeto deslizando para na parede (z = -4,500); puzzle
+completo continua resolvível; raio×esfera confere com o valor analítico.
+
+**O que foi aproveitado:** <preencher após revisão>

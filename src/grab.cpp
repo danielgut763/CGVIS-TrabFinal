@@ -1,5 +1,6 @@
 #include "grab.h"
 #include "matrices.h"
+#include "rigid.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,7 +42,6 @@ void GrabInit(GrabState& g)
     g.dir_local    = glm::vec3(0.0f, 0.0f, 1.0f);
     g.d0           = 1.0f;
     g.s0           = 1.0f;
-    g.r0           = 0.0f;
     g.yaw0         = 0.0f;
     g.was_solid    = true;
     g.yaw_offset   = 0.0f;
@@ -49,6 +49,9 @@ void GrabInit(GrabState& g)
     g.cur_distance = 0.0f;
     g.cur_factor   = 1.0f;
     g.blocked      = false;
+    g.vel_avg      = glm::vec3(0.0f);
+    g.last_center  = glm::vec3(0.0f);
+    g.has_last     = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,38 +105,72 @@ static int BoxIndexOfInstance(const std::vector<int>& box_instance, int instance
 }
 
 // Posicao da ORIGEM da instancia tal que o centro da sua bounding box caia em
-// "target_center". Os dois pontos so coincidem se a bbox da malha for centrada
-// na origem do modelo, o que nem sempre acontece.
-static glm::vec3 InstancePosForCenter(float yaw, float scale,
-                                      const glm::vec3& c_local,
+// "target_center", com o yaw e a escala dados e a inclinacao (tilt) atual da
+// instancia. Os dois pontos so coincidem se a bbox da malha for centrada na
+// origem do modelo, o que nem sempre acontece. Com a Model T*Ry*tilt*S:
+//     centro = pos + Ry(yaw)*tilt*(scale*c_local)
+//     pos    = target_center - Ry(yaw)*tilt*(scale*c_local)
+// (SetInstanceBodyCenter, rigid.cpp). Ate o M7 era so Ry(yaw); com o tilt, um
+// peao deitado na mao continua com o centro exatamente na mira.
+static glm::vec3 InstancePosForCenter(const Instance& inst, float yaw, float scale,
+                                      const glm::vec3& local_min, const glm::vec3& local_max,
                                       const glm::vec3& target_center)
 {
-    // Rotacao em torno de Y, na mesma convencao de Matrix_Rotate_Y.
-    float c = std::cos(yaw);
-    float s = std::sin(yaw);
-
-    glm::vec3 v = c_local * scale;
-    glm::vec3 off(c*v.x + s*v.z,
-                  v.y,
-                  -s*v.x + c*v.z);
-
-    return target_center - off;
-}
-
-// AABB em mundo que o objeto teria se o centro da sua bbox estivesse em
-// "center", com a escala e a rotacao dadas.
-static AABB ObjectAABBAt(const Instance& inst,
-                         const glm::vec3& local_min, const glm::vec3& local_max,
-                         float yaw, float scale, const glm::vec3& center)
-{
-    glm::vec3 c_local = (local_min + local_max) * 0.5f;
-
     Instance probe = inst;
     probe.yaw   = yaw;
     probe.scale = glm::vec3(scale, scale, scale);
-    probe.pos   = InstancePosForCenter(yaw, scale, c_local, center);
+    SetInstanceBodyCenter(probe, local_min, local_max, target_center);
+    return probe.pos;
+}
 
-    return AABBTransform(local_min, local_max, InstanceModelMatrix(probe));
+// Caixa de COLISAO em mundo que o objeto teria se o centro da sua bbox
+// estivesse em "center", com a escala e a rotacao dadas. Passa por
+// InstanceCollisionBox, a mesma funcao que monta as caixas da fisica: se o
+// pouso usasse outra caixa (a dos 8 cantos, por exemplo), um peao deitado
+// seria solto com folga embaixo e cairia alguns centimetros, ou uma bola
+// pareceria nao caber num vao em que cabe.
+static AABB ObjectAABBAt(const Instance& inst, int idx,
+                         const glm::vec3& local_min, const glm::vec3& local_max,
+                         float yaw, float scale, const glm::vec3& center)
+{
+    Instance probe = inst;
+    probe.yaw   = yaw;
+    probe.scale = glm::vec3(scale, scale, scale);
+    probe.pos   = InstancePosForCenter(inst, yaw, scale, local_min, local_max, center);
+
+    return InstanceCollisionBox(probe, idx, local_min, local_max);
+}
+
+// ---------------------------------------------------------------------------
+// Velocidade do objeto na mao (M8), para ele sair da mao com ela.
+//
+// A velocidade instantanea do centro, v = (c - c_anterior)/dt, e ruidosa: a
+// distancia de pouso muda aos saltos quando o raio passa pela quina de um
+// objeto. Por isso guardamos uma media exponencial (filtro passa-baixa de
+// primeira ordem), que nao depende da taxa de quadros:
+//     v_med <- v_med + a*(v - v_med),    a = 1 - exp(-dt/tau)
+// Com tau = 0,08 s, um movimento so pesa depois de uns 3 ou 4 quadros a
+// 60 Hz, e o que vale e o que aconteceu nos ultimos ~0,1 s antes de soltar.
+// ---------------------------------------------------------------------------
+static void TrackHeldVelocity(GrabState& g, const glm::vec3& center, float dt)
+{
+    if (dt <= 0.0f)
+    {
+        // Sem dt nao da para medir: o objeto sera solto parado (como no M7).
+        g.vel_avg  = glm::vec3(0.0f);
+        g.has_last = false;
+        return;
+    }
+
+    if (g.has_last)
+    {
+        glm::vec3 v = (center - g.last_center) * (1.0f / dt);
+        float a = 1.0f - std::exp(-dt / GrabConfig::RELEASE_VEL_TAU);
+        g.vel_avg = g.vel_avg + (v - g.vel_avg) * a;
+    }
+
+    g.last_center = center;
+    g.has_last    = true;
 }
 
 bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
@@ -164,7 +201,15 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
     if (!inst.grabbable)
         return false;
 
+    // Centro do corpo (centro da bbox local em mundo), o mesmo ponto que
+    // GrabUpdate mantem na mira. Para todas as formas ele coincide com o
+    // centro da caixa de colisao, que fica de reserva.
     glm::vec3 center = AABBCenter(boxes[hit.index]);
+    {
+        glm::vec3 lmin, lmax;
+        if (GetMeshLocalBBox(inst.mesh, &lmin, &lmax))
+            center = InstanceBodyCenter(inst, lmin, lmax);
+    }
     glm::vec3 v      = center - origin;
     float     d0     = Length3(v);
     if (d0 < GrabConfig::MIN_DISTANCE)
@@ -185,13 +230,22 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
 
     g.d0         = d0;
     g.s0         = inst.scale.x;   // objetos pegaveis usam escala uniforme
-    g.r0         = AABBHalfExtentAlongDir(boxes[hit.index], dir0);
     g.yaw0       = inst.yaw;
     g.yaw_offset = 0.0f;
     g.reach      = 1.0f;
     g.was_solid  = inst.solid;
     g.instance   = idx;
     g.blocked    = false;
+
+    // Comeca a medir a velocidade da mao do zero.
+    g.vel_avg    = glm::vec3(0.0f);
+    g.has_last   = false;
+
+    // O objeto pode ter sido pego no meio de um tombo, rolando ou caindo:
+    // na mao ele nao tem velocidade nem estado de movimento. A inclinacao
+    // (tilt) fica como esta: pegar um peao deitado mantem ele deitado.
+    inst.vel  = glm::vec3(0.0f);
+    inst.body = BodyState();
 
     // Enquanto esta na mao, o objeto sai da colisao (senao bloquearia o
     // proprio jogador) e o FOV fica travado: a invariante de tamanho aparente
@@ -205,7 +259,8 @@ bool GrabTryPick(GrabState& g, Camera& cam, float screen_ratio,
 void GrabUpdate(GrabState& g, const Camera& cam,
                 const std::vector<AABB>& boxes,
                 const std::vector<int>& box_instance,
-                const AABB& player_box)
+                const AABB& player_box,
+                float dt)
 {
     if (!GrabIsHolding(g))
         return;
@@ -264,7 +319,7 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     // que mantem o contato exato em forma fechada em qualquer angulo de visada
     // (evitando saltos ou flickering da busca binaria ao deslizar pelo piso).
     // -----------------------------------------------------------------------
-    AABB  box0  = ObjectAABBAt(inst, local_min, local_max, yaw, g.s0, glm::vec3(0.0f));
+    AABB  box0  = ObjectAABBAt(inst, g.instance, local_min, local_max, yaw, g.s0, glm::vec3(0.0f));
     float r_eff = AABBHalfExtentAlongDir(box0, dir);
     if (hit.hit)
     {
@@ -318,7 +373,7 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     AABB player_padded = AABBExpand(player_box, 0.02f);
     {
         glm::vec3 center = origin + dir*d;
-        AABB      probe  = ObjectAABBAt(inst, local_min, local_max,
+        AABB      probe  = ObjectAABBAt(inst, g.instance, local_min, local_max,
                                         yaw, g.s0*(d/g.d0), center);
 
         if (!too_close && AABBOverlapsAny(probe, boxes, skip))
@@ -330,7 +385,7 @@ void GrabUpdate(GrabState& g, const Camera& cam,
             {
                 float mid = 0.5f*(lo + hi);
                 glm::vec3 c = origin + dir*mid;
-                AABB b = ObjectAABBAt(inst, local_min, local_max,
+                AABB b = ObjectAABBAt(inst, g.instance, local_min, local_max,
                                       yaw, g.s0*(mid/g.d0), c);
 
                 if (AABBOverlapsAny(b, boxes, skip))
@@ -343,7 +398,7 @@ void GrabUpdate(GrabState& g, const Camera& cam,
         }
 
         glm::vec3 c = origin + dir*d;
-        AABB b = ObjectAABBAt(inst, local_min, local_max,
+        AABB b = ObjectAABBAt(inst, g.instance, local_min, local_max,
                               yaw, g.s0*(d/g.d0), c);
         AABB b_shrunk = AABBExpand(b, -GrabConfig::PLACE_MARGIN);
 
@@ -362,14 +417,15 @@ void GrabUpdate(GrabState& g, const Camera& cam,
     float scale  = g.s0 * factor;
 
     glm::vec3 center  = origin + dir*d;
-    glm::vec3 c_local = (local_min + local_max) * 0.5f;
 
+    inst.pos   = InstancePosForCenter(inst, yaw, scale, local_min, local_max, center);
     inst.yaw   = yaw;
     inst.scale = glm::vec3(scale, scale, scale);
-    inst.pos   = InstancePosForCenter(yaw, scale, c_local, center);
 
     g.cur_distance = d;
     g.cur_factor   = factor;
+
+    TrackHeldVelocity(g, center, dt);
 }
 
 bool GrabTryRelease(GrabState& g, Camera& cam,
@@ -390,7 +446,9 @@ bool GrabTryRelease(GrabState& g, Camera& cam,
     {
         const int skip = BoxIndexOfInstance(box_instance, g.instance);
 
-        AABB box = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
+        // A mesma caixa da fisica (InstanceCollisionBox): o que cabe aqui
+        // cabe la.
+        AABB box = InstanceCollisionBox(inst, g.instance, local_min, local_max);
 
         // Encolhemos um pouco a caixa antes de testar contra a cena para que
         // apenas ENCOSTAR numa parede nao conte como penetracao, e testamos
@@ -405,9 +463,29 @@ bool GrabTryRelease(GrabState& g, Camera& cam,
         }
     }
 
-    inst.solid   = g.was_solid;
-    inst.vel_y   = 0.0f;   // a partir daqui a gravidade assume (physics.cpp)
-    cam.lock_fov = false;
+    // Velocidade de saida: a media da mao, com modulo limitado (ver
+    // GrabConfig::RELEASE_MAX_SPEED para o porque do limite). Em look-at o
+    // objeto nao acompanha a camera (GrabUpdate nao roda), entao sai parado.
+    glm::vec3 v_out(0.0f);
+    if (GrabConfig::INHERIT_RELEASE_VELOCITY && cam.mode == CAM_FIRST_PERSON && g.has_last)
+    {
+        v_out = g.vel_avg;
+        float speed = Length3(v_out);
+        if (speed > GrabConfig::RELEASE_MAX_SPEED)
+            v_out = v_out * (GrabConfig::RELEASE_MAX_SPEED / speed);
+    }
+
+    // A partir daqui a fisica assume (physics.cpp): o objeto comeca no ar
+    // (MOTION_FALL) e, se ja estiver encostado no apoio, pousa no primeiro
+    // passo e assenta ou sai rolando.
+    inst.solid       = g.was_solid;
+    inst.vel         = v_out;
+    inst.body        = BodyState();
+    inst.body.motion = MOTION_FALL;
+    cam.lock_fov     = false;
+
+    g.vel_avg  = glm::vec3(0.0f);
+    g.has_last = false;
 
     g.instance = -1;
     g.blocked  = false;
@@ -430,13 +508,14 @@ void GrabRotate(GrabState& g, float delta_yaw)
         glm::vec3 local_min, local_max;
         if (GetMeshLocalBBox(inst.mesh, &local_min, &local_max))
         {
-            AABB cur_box      = AABBTransform(local_min, local_max, InstanceModelMatrix(inst));
-            glm::vec3 center  = AABBCenter(cur_box);
-            glm::vec3 c_local = (local_min + local_max) * 0.5f;
-            float yaw         = g.yaw0 + g.yaw_offset;
+            // Gira em torno do Y do mundo passando pelo centro do corpo:
+            // como a Model e T*Ry(yaw)*tilt*S, mudar o yaw gira o objeto
+            // inteiro (inclinado ou nao) em torno da vertical.
+            glm::vec3 center = InstanceBodyCenter(inst, local_min, local_max);
+            float     yaw    = g.yaw0 + g.yaw_offset;
 
+            inst.pos = InstancePosForCenter(inst, yaw, inst.scale.x, local_min, local_max, center);
             inst.yaw = yaw;
-            inst.pos = InstancePosForCenter(yaw, inst.scale.x, c_local, center);
         }
         else
         {
